@@ -80,8 +80,5 @@ def mask_to_slices(mask):
         rectangles.append(rect)
     return [tuple(slice(s, e) for s, e in rect) for rect in rectangles]
 
-# def assert_rectangular(idxs, starts, ends):
-#     idxs = set(map(tuple, idxs))
-#     rect_idxs = set(product(*(range(s, e) for s, e in zip(starts, ends))))
-#     assert idxs == rect_idxs
-
+def to_tuple_tree(arr):
+    return tuple(map(to_tuple_tree, arr) if np.ndim(arr) > 1 else arr)

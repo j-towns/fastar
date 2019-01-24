@@ -165,7 +165,7 @@ sub_rules[lax.mul_p] = binary_ufunc_sub(lax.mul_p)
 # Masked convolution
 def pop_msk(fun):
     def fun_(*args, **kwargs):
-        *args, rhs_mask = args
+        kwargs.pop('rhs_mask')
         return fun(*args, **kwargs)
     return fun_
 
@@ -186,7 +186,8 @@ ad.defbilinear(conv_general_dilated_masked_p,
 def conv_general_dilated_masked(
         lhs, rhs, window_strides, padding, lhs_dilation=None,
         rhs_dilation=None, dimension_numbers=None, rhs_mask=None):
-  rhs_mask = true_mask(rhs) if rhs_mask is None else rhs_mask
+  rhs_mask = util.to_tuple_tree(true_mask(rhs)
+                                if rhs_mask is None else rhs_mask)
   if type(dimension_numbers) is not lax.ConvDimensionNumbers:
     dimension_numbers = lax.conv_dimension_numbers(
         lhs.shape, rhs.shape, dimension_numbers)
@@ -200,10 +201,10 @@ def conv_general_dilated_masked(
   if rhs_dilation is None:
     rhs_dilation = (1,) * (rhs.ndim - 2)
   return conv_general_dilated_masked_p.bind(
-      lhs, rhs, rhs_mask, window_strides=tuple(window_strides),
+      lhs, rhs, window_strides=tuple(window_strides),
       padding=tuple(padding), lhs_dilation=tuple(lhs_dilation),
       rhs_dilation=tuple(rhs_dilation), dimension_numbers=dimension_numbers,
-      lhs_shape=lhs.shape, rhs_shape=rhs.shape)
+      rhs_mask=rhs_mask, lhs_shape=lhs.shape, rhs_shape=rhs.shape)
 
 def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
     # Note: we assume that rhs_mask doesn't change
@@ -220,9 +221,6 @@ def conv_general_dilated_masked_slice(
         slc, out, lhs, rhs, rhs_msk, window_strides, padding,
         lhs_dilation=None, rhs_dilation=None, dimension_numbers=None):
     lhs_shape, rhs_shape = np.shape(lhs), np.shape(rhs)
-    if isinstance(padding, str):
-        padding = lax.padtype_to_pads(lhs_shape[2:], rhs_shape[2:],
-                                      window_strides, padding)
     pad_low, pad_high = unzip2(padding)
     window_shape = lax._dilate_shape(rhs_shape, rhs_dilation)[2:]
     lhs_shape_dil = lax._dilate_shape(lhs_shape, lhs_dilation)[2:]
@@ -259,12 +257,12 @@ def conv_general_dilated_masked_slice(
 
 
 def conv_general_dilated_masked_sub(
-        old_out, lhs, rhs, rhs_msk, window_strides, padding, lhs_dilation=None,
-        rhs_dilation=None, dimension_numbers=None, **unused_kwargs):
+        old_out, lhs, rhs, window_strides, padding, lhs_dilation=None,
+        rhs_dilation=None, dimension_numbers=None, rhs_mask=None,
+        **unused_kwargs):
     lhs, lhs_msk = lhs
     rhs, rhs_var_msk = rhs
-    rhs_msk, rhs_msk_msk = rhs_msk
-    if not (np.all(rhs_var_msk) and np.all(rhs_msk_msk)):
+    if not np.all(rhs_var_msk):
         raise NotImplementedError
     outval, old_outmsk = old_out[0]
     if dimension_numbers is not None:
@@ -272,7 +270,7 @@ def conv_general_dilated_masked_sub(
         assert dimension_numbers.rhs_spec == tuple(range(np.ndim(rhs)))
         assert dimension_numbers.out_spec == tuple(range(np.ndim(outval)))
     outmsk = conv_general_dilated_outmask(
-        lhs_msk, rhs_msk, window_strides=window_strides, padding=padding,
+        lhs_msk, rhs_mask, window_strides=window_strides, padding=padding,
         lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
         dimension_numbers=dimension_numbers)
 
@@ -281,7 +279,7 @@ def conv_general_dilated_masked_sub(
         return old_out[0]
     for slc in util.mask_to_slices(new_msk):
         outval = conv_general_dilated_masked_slice(
-            slc, outval, lhs, rhs, rhs_msk, window_strides, padding,
+            slc, outval, lhs, rhs, rhs_mask, window_strides, padding,
             lhs_dilation, rhs_dilation, dimension_numbers)
     return Masked((outval, outmsk))
 
@@ -295,10 +293,9 @@ if __name__ is "__main__":
     rhs = np.array([[[[1., 2., 3.],
                       [4., 0., 0.],
                       [0., 0., 0.]]]])
-    rhs_mask = np.bool_(rhs)
+    rhs_mask = util.to_tuple_tree(np.bool_(rhs))
     f = lambda lhs, rhs: conv_general_dilated_masked(
-        lhs, rhs, window_strides, padding='SAME',
-        rhs_mask=rhs_mask)
+        lhs, rhs, window_strides, padding='SAME', rhs_mask=rhs_mask)
     jaxpr, consts = make_jaxpr(f)(lhs, rhs)
     _, env = firstpass(jaxpr, consts, lhs, rhs)
     val, env_ = fastpass(jaxpr, consts, env, Masked((lhs, lhs_mask)),
