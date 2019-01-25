@@ -8,6 +8,12 @@ from jax.util import safe_zip
 map = safe_map
 zip = safe_zip
 
+def true_mask(val):
+    return np.full_like(val, True, dtype=bool)
+
+def false_mask(val):
+    return np.full_like(val, False, dtype=bool)
+
 def to_tree(idxs):
     fsts = set(zip(*idxs)[0])
     if len(idxs[0]) > 1:
