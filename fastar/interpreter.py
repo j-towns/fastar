@@ -52,7 +52,7 @@ def firstpass(jaxpr, consts, *args):
         in_vals = map(read, eqn.invars)
         if eqn.bound_subjaxprs:
             raise NotImplementedError
-        ans = get_subprimitive(eqn.primitive)(None, *in_vals, **eqn.params)
+        ans = get_update(eqn.primitive)(None, *in_vals, **eqn.params)
         outvals = list(ans) if eqn.destructure else [ans]
         map(write, eqn.outvars, outvals)
     return read(jaxpr.outvar), env
@@ -86,8 +86,7 @@ def fastpass(jaxpr, consts, old_env, *args):
         in_vals = map(read, eqn.invars)
         if eqn.bound_subjaxprs:
             raise NotImplementedError
-        ans = get_subprimitive(eqn.primitive)(old_outvals, *in_vals,
-                                              **eqn.params)
+        ans = get_update(eqn.primitive)(old_outvals, *in_vals, **eqn.params)
         outvals = list(ans) if eqn.destructure else [ans]
         map(write, eqn.outvars, outvals)
     return read(jaxpr.outvar), env
@@ -104,12 +103,12 @@ class Parray(tuple):
     """
     pass
 
-## Subcomputation rules
-sub_rules = {}
+## Update rules
+update_rules = {}
 
-def get_subprimitive(p):
+def get_update(p):
     try:
-        return sub_rules[p]
+        return update_rules[p]
     except KeyError:
         raise NotImplementedError(
             "Parray computation rule for '{}' not implemented".format(p))

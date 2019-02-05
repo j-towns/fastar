@@ -33,7 +33,7 @@ def _init_out(func, *args, **params):
     return outval, outmask
 
 @curry
-def unary_ufunc_sub(func, old_out, a):
+def unary_ufunc_update(func, old_out, a):
     a, a_mask = a
     outval, old_outmask = old_out[0] if old_out else _init_out(func, a)
     new_mask = a_mask & ~old_outmask
@@ -44,7 +44,7 @@ def unary_ufunc_sub(func, old_out, a):
     return fa.Parray((outval, a_mask))
 
 @curry
-def binary_ufunc_sub(func, old_out, a, b):
+def binary_ufunc_update(func, old_out, a, b):
     a, a_mask = a
     b, b_mask = b
     outval, old_outmask = old_out[0] if old_out else _init_out(func, a, b)
@@ -60,10 +60,10 @@ def binary_ufunc_sub(func, old_out, a, b):
         outval = _add_at(outval, slc, func.bind(a[a_slice], b[b_slice]))
     return fa.Parray((outval, outmask))
 
-fa.sub_rules[lax.sin_p] = unary_ufunc_sub(lax.sin_p)
-fa.sub_rules[lax.add_p] = binary_ufunc_sub(lax.add_p)
-fa.sub_rules[lax.sub_p] = binary_ufunc_sub(lax.sub_p)
-fa.sub_rules[lax.mul_p] = binary_ufunc_sub(lax.mul_p)
+fa.update_rules[lax.sin_p] = unary_ufunc_update(lax.sin_p)
+fa.update_rules[lax.add_p] = binary_ufunc_update(lax.add_p)
+fa.update_rules[lax.sub_p] = binary_ufunc_update(lax.sub_p)
+fa.update_rules[lax.mul_p] = binary_ufunc_update(lax.mul_p)
 
 # fa.Parray convolution
 def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
@@ -116,7 +116,7 @@ def conv_general_dilated_masked_slice(
     return _add_at(out, slc, new)
 
 
-def conv_general_dilated_masked_sub(
+def conv_general_dilated_masked_update(
         old_out, lhs, rhs, window_strides, padding, lhs_dilation=None,
         rhs_dilation=None, dimension_numbers=None, rhs_mask=None,
         **unused_kwargs):
@@ -148,5 +148,5 @@ def conv_general_dilated_masked_sub(
             lhs_dilation, rhs_dilation, dimension_numbers)
     return fa.Parray((outval, outmsk))
 
-fa.sub_rules[primitives._conv_general_dilated_masked_p] = (
-    conv_general_dilated_masked_sub)
+fa.update_rules[primitives._conv_general_dilated_masked_p] = (
+    conv_general_dilated_masked_update)
