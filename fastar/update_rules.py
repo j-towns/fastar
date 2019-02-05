@@ -7,6 +7,7 @@ from jax.util import curry, safe_zip, safe_map, unzip2, partial
 import jax.lax as lax
 import jax.interpreters.xla as xla
 import jax.interpreters.ad as ad
+from jax.abstract_arrays import make_shaped_array
 
 import fastar.interpreter as fa
 import fastar.primitives as primitives
@@ -16,7 +17,6 @@ map = safe_map
 zip = safe_zip
 
 def _add_at(arr, idxs, vals):
-    # This may not be efficient
     def take(arr, idxs):
         return arr[idxs]
 
@@ -24,29 +24,32 @@ def _add_at(arr, idxs, vals):
     assert ans.shape == vals.shape
     return arr + take_vjp(vals)[0]
 
+def _init_out(func, *args, **params):
+    # TODO: generalize to jaxvals
+    args = map(make_shaped_array, args)
+    abstract_out = func.abstract_eval(*args, **params)
+    outval = lax.full(abstract_out.shape, 0, abstract_out.dtype)
+    outmask = onp.zeros(abstract_out.shape, bool)
+    return outval, outmask
 
 @curry
 def unary_ufunc_sub(func, old_out, a):
     a, a_mask = a
-    outval, old_outmask = old_out[0]
+    outval, old_outmask = old_out[0] if old_out else _init_out(func, a)
     new_mask = a_mask & ~old_outmask
-    if onp.all(~new_mask):
-        return old_out[0]
     slices = util.mask_to_slices(new_mask)
     for slc in slices:
         assert np.all(outval[slc] == 0)
         outval = _add_at(outval, slc, func.bind(a[slc]))
-    return fa.Masked((outval, a_mask))
+    return fa.Parray((outval, a_mask))
 
 @curry
 def binary_ufunc_sub(func, old_out, a, b):
     a, a_mask = a
     b, b_mask = b
-    outval, old_outmask = old_out[0]
+    outval, old_outmask = old_out[0] if old_out else _init_out(func, a, b)
     outmask = a_mask & b_mask
     new_mask = outmask & ~old_outmask
-    if onp.all(~new_mask):
-        return old_out[0]
     out_slices = util.mask_to_slices(new_mask)
     for slc in out_slices:
         a_slice = tuple(s if dim_sz > 1 else slice(None, None)
@@ -54,15 +57,15 @@ def binary_ufunc_sub(func, old_out, a, b):
         b_slice = tuple(s if dim_sz > 1 else slice(None, None)
                         for s, dim_sz in zip(slc[-np.ndim(b):], np.shape(b)))
         assert np.all(outval[slc] == 0)
-        new_outval = _add_at(outval, slc, func.bind(a[a_slice], b[b_slice]))
-    return fa.Masked((new_outval, outmask))
+        outval = _add_at(outval, slc, func.bind(a[a_slice], b[b_slice]))
+    return fa.Parray((outval, outmask))
 
 fa.sub_rules[lax.sin_p] = unary_ufunc_sub(lax.sin_p)
 fa.sub_rules[lax.add_p] = binary_ufunc_sub(lax.add_p)
 fa.sub_rules[lax.sub_p] = binary_ufunc_sub(lax.sub_p)
 fa.sub_rules[lax.mul_p] = binary_ufunc_sub(lax.mul_p)
 
-# fa.Masked convolution
+# fa.Parray convolution
 def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
     # Note: we assume that rhs_mask doesn't change
     in_chan = onp.shape(lhs_mask)[1]
@@ -121,7 +124,12 @@ def conv_general_dilated_masked_sub(
     rhs, rhs_var_msk = rhs
     if not np.all(rhs_var_msk):
         raise NotImplementedError
-    outval, old_outmsk = old_out[0]
+    outval, old_outmsk = old_out[0] if old_out else _init_out(
+        lax.conv_general_dilated_p, lhs, rhs,
+        window_strides=tuple(window_strides), padding=tuple(padding),
+        lhs_dilation=tuple(lhs_dilation), rhs_dilation=tuple(rhs_dilation),
+        dimension_numbers=dimension_numbers, rhs_mask=rhs_mask,
+        lhs_shape=lhs.shape, rhs_shape=rhs.shape)
     if dimension_numbers is not None:
         assert dimension_numbers.lhs_spec == tuple(range(np.ndim(lhs)))
         assert dimension_numbers.rhs_spec == tuple(range(np.ndim(rhs)))
@@ -138,7 +146,7 @@ def conv_general_dilated_masked_sub(
         outval = conv_general_dilated_masked_slice(
             slc, outval, lhs, rhs, rhs_mask, window_strides, padding,
             lhs_dilation, rhs_dilation, dimension_numbers)
-    return fa.Masked((outval, outmsk))
+    return fa.Parray((outval, outmsk))
 
 fa.sub_rules[primitives._conv_general_dilated_masked_p] = (
     conv_general_dilated_masked_sub)

@@ -1,19 +1,10 @@
-from itertools import product
-
-import numpy as onp
-
-from jax import vjp
-from jax.ad_util import zeros_like_jaxval
 from jax.api_util import (pytree_fun_to_jaxtupletree_fun,
                           pytree_to_jaxtupletree, wraps)
 import jax.core as jc
-import jax.interpreters.ad as ad
 import jax.interpreters.xla as xla
 import jax.interpreters.partial_eval as pe
 import jax.linear_util as lu
-import jax.numpy as np
-import jax.lax as lax
-from jax.util import curry, partial, safe_map, unzip2
+from jax.util import safe_map, unzip2, partial
 
 import fastar.util as util
 
@@ -40,50 +31,55 @@ def make_jaxpr(f):
 
 # Populate the cache
 def firstpass(jaxpr, consts, *args):
-    # Similar to jax.core.eval_jaxpr but returns env
     def read(v):
-        return env[v]
+        val = env[v]
+        assert isinstance(val, Parray)
+        return val
 
     def write(v, val):
+        assert isinstance(val, Parray)
+        env[v] = val
+
+    def write_const(v, val):
+        val = Parray((val, util.true_mask(val)))
         env[v] = val
 
     env = {}
-    write(jc.unitvar, jc.unit)
-    map(write, jaxpr.constvars, consts)
+    write_const(jc.unitvar, jc.unit)
+    map(write_const, jaxpr.constvars, consts)
     map(write, jaxpr.invars, args)
     for eqn in jaxpr.eqns:
         in_vals = map(read, eqn.invars)
         if eqn.bound_subjaxprs:
             raise NotImplementedError
-        ans = eqn.primitive.bind(*in_vals, **eqn.params)
+        ans = get_subprimitive(eqn.primitive)(None, *in_vals, **eqn.params)
         outvals = list(ans) if eqn.destructure else [ans]
-        map(write, eqn.outvars, map(zeros_like_jaxval, outvals))
+        map(write, eqn.outvars, outvals)
     return read(jaxpr.outvar), env
 
 
 def fastpass(jaxpr, consts, old_env, *args):
     def read(v):
         val = env[v]
-        assert isinstance(val, Masked)
+        assert isinstance(val, Parray)
         return val
 
     def read_old(v):
         val = old_env[v]
-        if not isinstance(val, Masked):
-            val = Masked((val, util.false_mask(val)))
+        assert isinstance(val, Parray)
         return val
 
-    def write_const(v, val):
-        val = Masked((val, util.true_mask(val)))
+    def write(v, val):
+        assert isinstance(val, Parray)
         env[v] = val
 
-    def write(v, val):
-        assert isinstance(val, Masked)
+    def write_const(v, val):
+        val = Parray((val, util.true_mask(val)))
         env[v] = val
 
     env = {}
-    write_const(jc.unitvar, jc.unit)          # TODO: don't need these every
-    map(write_const, jaxpr.constvars, consts) # time
+    write_const(jc.unitvar, jc.unit)
+    map(write_const, jaxpr.constvars, consts)
     map(write, jaxpr.invars, args)
     for eqn in jaxpr.eqns:
         old_outvals = map(read_old, eqn.outvars)
@@ -96,9 +92,17 @@ def fastpass(jaxpr, consts, old_env, *args):
         map(write, eqn.outvars, outvals)
     return read(jaxpr.outvar), env
 
-class Masked(tuple):
-    pass
+class Parray(tuple):
+    """
+    Array which has been partially evaluated, represented by a pair
 
+        (arr, computed)
+
+    where `computed` is a boolean array with True where arr has been computed,
+    False where it hasn't yet. `arr` should be initialized to zeros so that
+    np.all(~computed & arr == 0).
+    """
+    pass
 
 ## Subcomputation rules
 sub_rules = {}
@@ -108,4 +112,17 @@ def get_subprimitive(p):
         return sub_rules[p]
     except KeyError:
         raise NotImplementedError(
-            "Masked computation rule for '{}' not implemented".format(p))
+            "Parray computation rule for '{}' not implemented".format(p))
+
+## High level API
+def accelerate(fun):
+    def first_fun(*args, **kwargs):
+        raw_args = map(lambda arg: arg[0], args)
+        jaxpr, consts = make_jaxpr(fun)(*raw_args, **kwargs)
+        ans, env = firstpass(jaxpr, consts, *args)
+
+        def fast_fun(env, *args, **kwargs):
+            ans, env = fastpass(jaxpr, consts, env, *args)
+            return ans, partial(fast_fun, env)
+        return ans, partial(fast_fun, env)
+    return first_fun

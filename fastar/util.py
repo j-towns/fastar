@@ -15,8 +15,8 @@ def false_mask(val):
     return np.full_like(val, False, dtype=bool)
 
 def to_tree(idxs):
-    fsts = set(zip(*idxs)[0])
-    if len(idxs[0]) > 1:
+    fsts = set(np.asarray(idxs)[:, 0])
+    if np.shape(idxs)[1] > 1:
         return {fst: to_tree([idx[1:] for idx in idxs if idx[0] == fst])
                 for fst in fsts}
     else:
