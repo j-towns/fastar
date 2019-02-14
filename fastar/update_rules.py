@@ -71,13 +71,35 @@ def dot_update(old_out, a, b):
         outval = _add_at(outval, slc, lax.dot_p.bind(a[a_slice], b[b_slice]))
     return fa.Parray((outval, outmask))
 
-unary_functions = [lax.sin_p]
-for f in unary_functions:
-    fa.update_rules[f] = unop_update(f)
+@curry
+def reduce_update(func, old_out, a, axes, **kwargs):
+    a, a_mask = a
+    outval, old_outmask = old_out[0] if old_out else _init_out(func, a, axes=axes, **kwargs)
+    outmask = onp.equal(onp.sum(a_mask.astype(int), axis=axes), onp.prod([a_mask.shape[i] for i in axes]))
+    new_mask = outmask & ~old_outmask
+    slices = util.mask_to_slices(new_mask)
+    for slc in slices:
+        a_slice = list(slc)
+        for axis in axes:
+            a_slice.insert(axis, slice(None, None))
+        a_slice = tuple(a_slice)
 
-binary_functions = [lax.add_p, lax.sub_p, lax.mul_p]
-for f in binary_functions:
-    fa.update_rules[f] = binop_update(f)
+        assert np.all(outval[slc] == 0)
+        outval = _add_at(outval, slc, func.bind(a[a_slice], axes=axes, **kwargs))
+    return fa.Parray((outval, outmask))
+
+
+unops = [lax.sin_p]
+for op in unops:
+    fa.update_rules[op] = unop_update(op)
+
+reduce_ops = [lax.reduce_sum_p, lax.reduce_min_p, lax.reduce_max_p]
+for op in reduce_ops:
+    fa.update_rules[op] = reduce_update(op)
+
+binops = [lax.add_p, lax.sub_p, lax.mul_p]
+for op in binops:
+    fa.update_rules[op] = binop_update(op)
 
 fa.update_rules[lax.dot_p] = dot_update
 
