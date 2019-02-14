@@ -1,10 +1,9 @@
-import numpy as onp
-
-from jax import vjp
-import jax.numpy as np
-from jax.util import curry, safe_zip, safe_map, unzip2
 import jax.lax as lax
+import jax.numpy as np
+import numpy as onp
+from jax import vjp
 from jax.abstract_arrays import make_shaped_array
+from jax.util import curry, safe_zip, safe_map, unzip2
 
 import fastar.interpreter as fa
 import fastar.primitives as primitives
@@ -12,6 +11,8 @@ import fastar.util as util
 
 map = safe_map
 zip = safe_zip
+all = slice(None, None)
+
 
 def _add_at(arr, idxs, vals):
     def take(arr, idxs):
@@ -21,6 +22,7 @@ def _add_at(arr, idxs, vals):
     assert ans.shape == vals.shape
     return arr + take_vjp(vals)[0]
 
+
 def _init_out(func, *args, **params):
     # TODO: generalize to jaxvals
     args = map(make_shaped_array, args)
@@ -29,64 +31,70 @@ def _init_out(func, *args, **params):
     outmask = onp.zeros(abstract_out.shape, bool)
     return outval, outmask
 
+
+def sliceableop_update(func, old_out, *args, output_mask, input_slices_from_output_slice, **params):
+    """Applicable to all operations with the following property: Any slice of the output can be
+    calculated by applying the corresponding operator to one slice of each input."""
+    outval, old_outmask = old_out[0] if old_out else _init_out(func, *args, **params)
+    new_mask = output_mask & ~old_outmask
+    output_slices = util.mask_to_slices(new_mask)
+    for output_slice in output_slices:
+        input_slices = input_slices_from_output_slice(output_slice)
+        sliced_inputs = list(arg[input_slice] for arg, input_slice in zip(args, input_slices))
+        sliced_output = func.bind(*sliced_inputs, **params)
+
+        assert np.all(outval[output_slice] == 0)
+        outval = _add_at(outval, output_slice, sliced_output)
+
+    return fa.Parray((outval, output_mask))
+
+
 @curry
 def unop_update(func, old_out, a):
     a, a_mask = a
-    outval, old_outmask = old_out[0] if old_out else _init_out(func, a)
-    new_mask = a_mask & ~old_outmask
-    slices = util.mask_to_slices(new_mask)
-    for slc in slices:
-        assert np.all(outval[slc] == 0)
-        outval = _add_at(outval, slc, func.bind(a[slc]))
-    return fa.Parray((outval, a_mask))
+    return sliceableop_update(func, old_out, a, output_mask=a_mask,
+                              input_slices_from_output_slice=lambda output_slice: (output_slice,))
+
+
+@curry
+def reduce_update(func, old_out, a, **params):
+    a, a_mask = a
+    axes = params['axes']
+
+    def input_slices_from_output_slice(output_slice):
+        a_slice = list(output_slice)
+        for axis in axes:
+            a_slice.insert(axis, all)
+        return tuple(a_slice),
+
+    return sliceableop_update(
+        func, old_out, a, output_mask=onp.equal(onp.sum(a_mask.astype(int), axis=axes),
+                                                onp.prod([a_mask.shape[axis] for axis in axes])),
+        input_slices_from_output_slice=input_slices_from_output_slice, **params)
+
 
 @curry
 def binop_update(func, old_out, a, b):
     a, a_mask = a
     b, b_mask = b
-    outval, old_outmask = old_out[0] if old_out else _init_out(func, a, b)
-    outmask = a_mask & b_mask
-    new_mask = outmask & ~old_outmask
-    out_slices = util.mask_to_slices(new_mask)
-    for slc in out_slices:
-        a_slice = tuple(s if dim_sz > 1 else slice(None, None)
-                        for s, dim_sz in zip(slc[-np.ndim(a):], np.shape(a)))
-        b_slice = tuple(s if dim_sz > 1 else slice(None, None)
-                        for s, dim_sz in zip(slc[-np.ndim(b):], np.shape(b)))
-        assert np.all(outval[slc] == 0)
-        outval = _add_at(outval, slc, func.bind(a[a_slice], b[b_slice]))
-    return fa.Parray((outval, outmask))
+    return sliceableop_update(func, old_out, a, b,
+                              output_mask=a_mask & b_mask,
+                              input_slices_from_output_slice=lambda output_slice: (
+                                  tuple(s if dim_sz > 1 else all for s, dim_sz in
+                                        zip(output_slice[-np.ndim(a):], np.shape(a))),
+                                  tuple(s if dim_sz > 1 else all for s, dim_sz in
+                                        zip(output_slice[-np.ndim(b):], np.shape(b)))))
+
 
 def dot_update(old_out, a, b):
     a, a_mask = a
     b, b_mask = b
-    outval, old_outmask = old_out[0] if old_out else _init_out(lax.dot_p, a, b)
-    outmask = onp.equal(onp.dot(a_mask.astype(int), b_mask.astype(int)), onp.shape(b_mask)[0])
-    new_mask = outmask & ~old_outmask
-    out_slices = util.mask_to_slices(new_mask)
-    for slc in out_slices:
-        a_slice = (slc[0], slice(None, None)) if len(slc) > 0 else (slice(None, None),)
-        b_slice = (slice(None, None), slc[1]) if len(slc) > 1 else (slice(None, None),)
-        assert np.all(outval[slc] == 0)
-        outval = _add_at(outval, slc, lax.dot_p.bind(a[a_slice], b[b_slice]))
-    return fa.Parray((outval, outmask))
-
-@curry
-def reduce_update(func, old_out, a, axes, **kwargs):
-    a, a_mask = a
-    outval, old_outmask = old_out[0] if old_out else _init_out(func, a, axes=axes, **kwargs)
-    outmask = onp.equal(onp.sum(a_mask.astype(int), axis=axes), onp.prod([a_mask.shape[i] for i in axes]))
-    new_mask = outmask & ~old_outmask
-    slices = util.mask_to_slices(new_mask)
-    for slc in slices:
-        a_slice = list(slc)
-        for axis in axes:
-            a_slice.insert(axis, slice(None, None))
-        a_slice = tuple(a_slice)
-
-        assert np.all(outval[slc] == 0)
-        outval = _add_at(outval, slc, func.bind(a[a_slice], axes=axes, **kwargs))
-    return fa.Parray((outval, outmask))
+    return sliceableop_update(
+        lax.dot_p, old_out, a, b, output_mask=onp.equal(
+            onp.dot(a_mask.astype(int), b_mask.astype(int)), onp.shape(b_mask)[0]),
+        input_slices_from_output_slice=lambda output_slice: (
+            (output_slice[0], all) if len(output_slice) > 0 else (all,),
+            (all, output_slice[1]) if len(output_slice) > 1 else (all,)))
 
 
 unops = [lax.sin_p]
@@ -103,6 +111,7 @@ for op in binops:
 
 fa.update_rules[lax.dot_p] = dot_update
 
+
 # fa.Parray convolution
 def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
     # Note: we assume that rhs_mask doesn't change
@@ -115,6 +124,7 @@ def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
         onp.ones_like(lhs_mask), rhs_mask, **params))
     return out == full_out
 
+
 def conv_general_dilated_masked_slice(
         slc, out, lhs, rhs, rhs_msk, window_strides, padding,
         lhs_dilation=None, rhs_dilation=None, dimension_numbers=None):
@@ -123,11 +133,11 @@ def conv_general_dilated_masked_slice(
     window_shape = lax._dilate_shape(rhs_shape, rhs_dilation)[2:]
     lhs_shape_dil = lax._dilate_shape(lhs_shape, lhs_dilation)[2:]
     out_start = onp.array([s.start for s in slc[2:]])
-    out_stop   = onp.array([s.stop   for s in slc[2:]])
+    out_stop = onp.array([s.stop for s in slc[2:]])
     out_start = out_start * np.array(window_strides)
     out_stop = out_stop * np.array(window_strides)
     lhs_start_dilated = onp.subtract(out_start, pad_low)
-    lhs_stop_dilated   = onp.subtract(out_stop + window_shape - 1, pad_low)
+    lhs_stop_dilated = onp.subtract(out_stop + window_shape - 1, pad_low)
     lhs_start = np.where(
         lhs_start_dilated > 0,
         np.where(lhs_start_dilated < lhs_shape_dil,
@@ -185,6 +195,7 @@ def conv_general_dilated_masked_update(
             slc, outval, lhs, rhs, rhs_mask, window_strides, padding,
             lhs_dilation, rhs_dilation, dimension_numbers)
     return fa.Parray((outval, outmsk))
+
 
 fa.update_rules[primitives._conv_general_dilated_masked_p] = (
     conv_general_dilated_masked_update)

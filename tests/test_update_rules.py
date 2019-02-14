@@ -2,6 +2,7 @@ import functools
 
 import jax.lax as lax
 import numpy as np
+
 from fastar.test_util import check_fun
 
 rng = np.random.RandomState(0)
@@ -12,14 +13,17 @@ check = functools.partial(check_fun, rng)
 # Unops
 def test_sin(): check(lax.sin, R(1, 2))
 
+
 def test_reduce_sum_vector(): check(lambda x: lax._reduce_sum(x, axes=(0,)), R(4))
 def test_reduce_sum_matrix_axis0(): check(lambda x: lax._reduce_sum(x, axes=(0,)), R(2, 4))
 def test_reduce_sum_matrix_axis1(): check(lambda x: lax._reduce_sum(x, axes=(1,)), R(2, 4))
 def test_reduce_sum_matrix_both(): check(lambda x: lax._reduce_sum(x, axes=(0, 1)), R(2, 4))
 def test_reduce_sum_tensor(): check(lambda x: lax._reduce_sum(x, axes=(0, 2)), R(2, 3, 4))
 
+
 def test_reduce_min(): check(lambda x: lax._reduce_min(x, axes=(0,)), R(2, 4))
 def test_reduce_max(): check(lambda x: lax._reduce_max(x, axes=(0,)), R(2, 4))
+
 
 # Binops
 def test_add_scalar(): check(lax.add, R(), R())
