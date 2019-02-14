@@ -118,10 +118,13 @@ def accelerate(fun):
     def first_fun(*args, **kwargs):
         raw_args = map(lambda arg: arg[0], args)
         jaxpr, consts = make_jaxpr(fun)(*raw_args, **kwargs)
-        ans, env = firstpass(jaxpr, consts, *args)
+        args_to_numpy = lambda args: [Parray((util.to_numpy(raw_arg), mask))
+                                      for raw_arg, mask in args]
+
+        ans, env = firstpass(jaxpr, consts, *args_to_numpy(args))
 
         def fast_fun(env, *args, **kwargs):
-            ans, env = fastpass(jaxpr, consts, env, *args)
+            ans, env = fastpass(jaxpr, consts, env, *args_to_numpy(args))
             return ans, partial(fast_fun, env)
         return ans, partial(fast_fun, env)
     return first_fun
