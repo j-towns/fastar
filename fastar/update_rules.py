@@ -30,7 +30,7 @@ def _init_out(func, *args, **params):
     return outval, outmask
 
 @curry
-def unary_ufunc_update(func, old_out, a):
+def unop_update(func, old_out, a):
     a, a_mask = a
     outval, old_outmask = old_out[0] if old_out else _init_out(func, a)
     new_mask = a_mask & ~old_outmask
@@ -41,7 +41,7 @@ def unary_ufunc_update(func, old_out, a):
     return fa.Parray((outval, a_mask))
 
 @curry
-def binary_ufunc_update(func, old_out, a, b):
+def binop_update(func, old_out, a, b):
     a, a_mask = a
     b, b_mask = b
     outval, old_outmask = old_out[0] if old_out else _init_out(func, a, b)
@@ -57,13 +57,11 @@ def binary_ufunc_update(func, old_out, a, b):
         outval = _add_at(outval, slc, func.bind(a[a_slice], b[b_slice]))
     return fa.Parray((outval, outmask))
 
-def dot_ufunc_update(old_out, a, b):
+def dot_update(old_out, a, b):
     a, a_mask = a
     b, b_mask = b
     outval, old_outmask = old_out[0] if old_out else _init_out(lax.dot_p, a, b)
-
     outmask = onp.equal(onp.dot(a_mask.astype(int), b_mask.astype(int)), onp.shape(b_mask)[0])
-
     new_mask = outmask & ~old_outmask
     out_slices = util.mask_to_slices(new_mask)
     for slc in out_slices:
@@ -75,13 +73,13 @@ def dot_ufunc_update(old_out, a, b):
 
 unary_functions = [lax.sin_p]
 for f in unary_functions:
-    fa.update_rules[f] = unary_ufunc_update(f)
+    fa.update_rules[f] = unop_update(f)
 
 binary_functions = [lax.add_p, lax.sub_p, lax.mul_p]
 for f in binary_functions:
-    fa.update_rules[f] = binary_ufunc_update(f)
+    fa.update_rules[f] = binop_update(f)
 
-fa.update_rules[lax.dot_p] = dot_ufunc_update
+fa.update_rules[lax.dot_p] = dot_update
 
 # fa.Parray convolution
 def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
