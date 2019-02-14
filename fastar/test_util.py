@@ -1,10 +1,8 @@
 from jax.util import safe_map
 from jax.util import safe_zip
-from itertools import product
 from fastar import accelerate, Parray
 import fastar.util as util
 import numpy as np
-import numpy.random
 
 map = safe_map
 zip = safe_zip
@@ -48,4 +46,5 @@ def check_fun(rng, fun, *args):
         ans_old = ans_
     ans_, mask = ans_
     assert np.all(mask)
-    assert np.all(ans == ans_)
+    assert np.allclose(ans, ans_)
+    assert ans.dtype == ans_.dtype

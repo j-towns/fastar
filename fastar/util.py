@@ -1,5 +1,4 @@
 from copy import deepcopy as copy
-from itertools import product, groupby
 import numpy as np
 
 from jax.util import safe_map
@@ -78,6 +77,9 @@ def mask_to_slices(mask):
     """
     Greedily search for rectangular slices in mask.
     """
+    if np.shape(mask) == () and mask:
+            return [()]
+
     rectangles = []
     idx_tree = to_tree(np.argwhere(mask))
     while idx_tree:
@@ -88,3 +90,12 @@ def mask_to_slices(mask):
 
 def to_tuple_tree(arr):
     return tuple(map(to_tuple_tree, arr) if np.ndim(arr) > 1 else arr)
+
+def to_numpy(x):
+    if isinstance(x, float):
+        return np.float64(x)
+
+    if isinstance(x, int):
+        return np.int64(x)
+
+    return x

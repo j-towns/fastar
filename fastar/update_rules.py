@@ -1,12 +1,9 @@
 import numpy as onp
 
-import jax.core as jc
 from jax import vjp
 import jax.numpy as np
-from jax.util import curry, safe_zip, safe_map, unzip2, partial
+from jax.util import curry, safe_zip, safe_map, unzip2
 import jax.lax as lax
-import jax.interpreters.xla as xla
-import jax.interpreters.ad as ad
 from jax.abstract_arrays import make_shaped_array
 
 import fastar.interpreter as fa
@@ -33,7 +30,7 @@ def _init_out(func, *args, **params):
     return outval, outmask
 
 @curry
-def unary_ufunc_update(func, old_out, a):
+def unop_update(func, old_out, a):
     a, a_mask = a
     outval, old_outmask = old_out[0] if old_out else _init_out(func, a)
     new_mask = a_mask & ~old_outmask
@@ -44,7 +41,7 @@ def unary_ufunc_update(func, old_out, a):
     return fa.Parray((outval, a_mask))
 
 @curry
-def binary_ufunc_update(func, old_out, a, b):
+def binop_update(func, old_out, a, b):
     a, a_mask = a
     b, b_mask = b
     outval, old_outmask = old_out[0] if old_out else _init_out(func, a, b)
@@ -60,10 +57,29 @@ def binary_ufunc_update(func, old_out, a, b):
         outval = _add_at(outval, slc, func.bind(a[a_slice], b[b_slice]))
     return fa.Parray((outval, outmask))
 
-fa.update_rules[lax.sin_p] = unary_ufunc_update(lax.sin_p)
-fa.update_rules[lax.add_p] = binary_ufunc_update(lax.add_p)
-fa.update_rules[lax.sub_p] = binary_ufunc_update(lax.sub_p)
-fa.update_rules[lax.mul_p] = binary_ufunc_update(lax.mul_p)
+def dot_update(old_out, a, b):
+    a, a_mask = a
+    b, b_mask = b
+    outval, old_outmask = old_out[0] if old_out else _init_out(lax.dot_p, a, b)
+    outmask = onp.equal(onp.dot(a_mask.astype(int), b_mask.astype(int)), onp.shape(b_mask)[0])
+    new_mask = outmask & ~old_outmask
+    out_slices = util.mask_to_slices(new_mask)
+    for slc in out_slices:
+        a_slice = (slc[0], slice(None, None)) if len(slc) > 0 else (slice(None, None),)
+        b_slice = (slice(None, None), slc[1]) if len(slc) > 1 else (slice(None, None),)
+        assert np.all(outval[slc] == 0)
+        outval = _add_at(outval, slc, lax.dot_p.bind(a[a_slice], b[b_slice]))
+    return fa.Parray((outval, outmask))
+
+unary_functions = [lax.sin_p]
+for f in unary_functions:
+    fa.update_rules[f] = unop_update(f)
+
+binary_functions = [lax.add_p, lax.sub_p, lax.mul_p]
+for f in binary_functions:
+    fa.update_rules[f] = binop_update(f)
+
+fa.update_rules[lax.dot_p] = dot_update
 
 # fa.Parray convolution
 def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
