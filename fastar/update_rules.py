@@ -32,9 +32,10 @@ def _init_output(func, *args, init_value=0, **params):
     return outval, outmask
 
 
-def sliceableop_update(func, old_out, *args, output_mask, input_slices_from_output_slice,
-                       init_output=_init_output, sliced_output_from_sliced_inputs=None,
-                       init_value=0,
+def sliceableop_update(func, old_out, *args, output_mask,
+                       input_slices_from_output_slice,
+                       init_output=_init_output,
+                       sliced_output_from_sliced_inputs=None, init_value=0,
                        **params):
     """Applicable to all operations with the following property:
     Any slice of the output can be calculated from one slice of each input.
@@ -43,15 +44,17 @@ def sliceableop_update(func, old_out, *args, output_mask, input_slices_from_outp
     This behavior can be overriden with input_slices_from_output_slice."""
 
     if sliced_output_from_sliced_inputs is None:
-        sliced_output_from_sliced_inputs = lambda sliced_inputs: func.bind(*sliced_inputs, **params)
+        sliced_output_from_sliced_inputs = lambda sliced_inputs: func.bind(
+            *sliced_inputs, **params)
 
-    outval, old_outmask = old_out[0] if old_out else init_output(func, *args, init_value=init_value,
-                                                                 **params)
+    outval, old_outmask = old_out[0] if old_out else init_output(
+        func, *args, init_value=init_value, **params)
     new_mask = output_mask & ~old_outmask
     output_slices = util.mask_to_slices(new_mask)
     for output_slice in output_slices:
         input_slices = input_slices_from_output_slice(output_slice)
-        sliced_inputs = list(arg[input_slice] for arg, input_slice in zip(args, input_slices))
+        sliced_inputs = list(
+            arg[input_slice] for arg, input_slice in zip(args, input_slices))
         sliced_output = sliced_output_from_sliced_inputs(sliced_inputs)
 
         assert np.all(outval[output_slice] == init_value)
@@ -64,7 +67,8 @@ def sliceableop_update(func, old_out, *args, output_mask, input_slices_from_outp
 def unop_update(func, old_out, a):
     a, a_mask = a
     return sliceableop_update(func, old_out, a, output_mask=a_mask,
-                              input_slices_from_output_slice=lambda output_slice: (output_slice,))
+                              input_slices_from_output_slice=lambda
+                                  output_slice: (output_slice,))
 
 
 @curry
@@ -78,21 +82,24 @@ def reduce_update(func, old_out, a, axes, **params):
         return tuple(a_slice),
 
     return sliceableop_update(
-        func, old_out, a, output_mask=onp.equal(onp.sum(a_mask.astype(int), axis=axes),
-                                                onp.prod([a_mask.shape[axis] for axis in axes])),
-        input_slices_from_output_slice=input_slices_from_output_slice, axes=axes, **params)
+        func, old_out, a,
+        output_mask=onp.equal(onp.sum(a_mask.astype(int), axis=axes),
+                              onp.prod([a_mask.shape[axis] for axis in axes])),
+        input_slices_from_output_slice=input_slices_from_output_slice,
+        axes=axes, **params)
 
 
 @curry
 def binop_update(func, old_out, a, b):
     a, a_mask = a
     b, b_mask = b
-    return sliceableop_update(func, old_out, a, b, output_mask=a_mask & b_mask,
-                              input_slices_from_output_slice=lambda output_slice: (
-                                  tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
-                                        zip(output_slice[-np.ndim(a):], np.shape(a))),
-                                  tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
-                                        zip(output_slice[-np.ndim(b):], np.shape(b)))))
+    return sliceableop_update(
+        func, old_out, a, b, output_mask=a_mask & b_mask,
+        input_slices_from_output_slice=lambda output_slice: (
+            tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
+                  zip(output_slice[-np.ndim(a):], np.shape(a))),
+            tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
+                  zip(output_slice[-np.ndim(b):], np.shape(b)))))
 
 
 def dot_update(old_out, a, b):
@@ -100,10 +107,11 @@ def dot_update(old_out, a, b):
     b, b_mask = b
     return sliceableop_update(
         lax.dot_p, old_out, a, b, output_mask=onp.equal(
-            onp.dot(a_mask.astype(int), b_mask.astype(int)), onp.shape(b_mask)[0]),
-        input_slices_from_output_slice=lambda output_slice: (
-            (output_slice[0], noneslice) if len(output_slice) > 0 else (noneslice,),
-            (noneslice, output_slice[1]) if len(output_slice) > 1 else (noneslice,)))
+            onp.dot(a_mask.astype(int), b_mask.astype(int)),
+            onp.shape(b_mask)[0]),
+        input_slices_from_output_slice=lambda s: (
+            (s[0], noneslice) if len(s) > 0 else (noneslice,),
+            (noneslice, s[1]) if len(s) > 1 else (noneslice,)))
 
 
 unops = [lax.sin_p]
@@ -132,7 +140,8 @@ def pad_update(old_out, a, padding_value, padding_config):
 
         for index, (lo, hi, interior) in enumerate(padding_config):
             # TODO:
-            if interior != 0: raise NotImplementedError("Interior padding not yet supported.")
+            if interior != 0: raise NotImplementedError(
+                "Interior padding not yet supported.")
 
             lower_slice = [slice(None, lo) if index == i else noneslice
                            for i, s in enumerate(outmask.shape)]
@@ -149,17 +158,56 @@ def pad_update(old_out, a, padding_value, padding_config):
 
     def input_slices_from_output_slice(output_slice):
         return (tuple(slice(s.start - lo, s.stop - lo, None)
-                      for s, (lo, _, _) in zip(output_slice, padding_config)), ())
+                      for s, (lo, _, _) in zip(output_slice, padding_config)),
+                ())
 
     return sliceableop_update(
         lax.pad_p, old_out, a, padding_value, output_mask=output_mask,
         init_output=init_output, init_value=padding_value,
         input_slices_from_output_slice=input_slices_from_output_slice,
-        sliced_output_from_sliced_inputs=lambda sliced_inputs: sliced_inputs[0],
+        sliced_output_from_sliced_inputs=lambda s: s[0],
         padding_config=padding_config)
 
 
 fa.update_rules[lax.pad_p] = pad_update
+
+
+def transpose_update(old_out, a, permutation):
+    a, a_mask = a
+
+    def inversely_permute_slice(slice):
+        s = [noneslice] * len(slice)
+        for i, d in enumerate(permutation):
+            s[d] = slice[i]
+        return s
+
+    return sliceableop_update(
+        lax.transpose_p, old_out, a,
+        output_mask=onp.transpose(a_mask, permutation),
+        input_slices_from_output_slice=lambda s: (inversely_permute_slice(s),),
+        permutation=permutation)
+
+
+fa.update_rules[lax.transpose_p] = transpose_update
+
+
+def reverse_update(old_out, a, dimensions):
+    a, a_mask = a
+
+    def reverse_slice(s):
+        return [slice(-s.stop if s.stop else None,
+                      -s.start if s.start else None, None)
+                if i in dimensions else s
+                for i, s in enumerate(s)]
+
+    return sliceableop_update(
+        lax.rev_p, old_out, a,
+        output_mask=onp.flip(a_mask, dimensions),
+        input_slices_from_output_slice=lambda s: (reverse_slice(s),),
+        dimensions=dimensions)
+
+
+fa.update_rules[lax.rev_p] = reverse_update
 
 
 # fa.Parray convolution
@@ -201,12 +249,14 @@ def conv_general_dilated_masked_slice(
                  lhs_stop_dilated - (lhs_shape_dil - lhs_shape[2:])),
         lhs_stop_dilated // lhs_dilation)
     sub_pad_low = np.where(lhs_start < 0, -lhs_start, 0)
-    sub_pad_high = np.where(lhs_stop > lhs_shape_dil, lhs_stop - lhs_shape_dil, 0)
+    sub_pad_high = np.where(lhs_stop > lhs_shape_dil, lhs_stop - lhs_shape_dil,
+                            0)
     sub_padding = zip(sub_pad_low, sub_pad_high)
     lhs_start = np.where(lhs_start > 0, lhs_start, 0)
     lhs_stop = np.where(lhs_stop > lhs_shape_dil, lhs_shape_dil, lhs_stop)
     lhs_slice = ((slc[0], slice(None, None)) +
-                 tuple(slice(int(s), int(e)) for s, e in zip(lhs_start, lhs_stop)))
+                 tuple(slice(int(s), int(e)) for s, e in
+                       zip(lhs_start, lhs_stop)))
     new = lax.conv_general_dilated(lhs[lhs_slice], rhs, window_strides,
                                    sub_padding, lhs_dilation=lhs_dilation,
                                    rhs_dilation=rhs_dilation,
