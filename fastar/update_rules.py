@@ -11,7 +11,7 @@ import fastar.util as util
 
 map = safe_map
 zip = safe_zip
-all = slice(None, None)
+noneslice = slice(None, None)
 
 
 def _add_at(arr, idxs, vals):
@@ -74,7 +74,7 @@ def reduce_update(func, old_out, a, axes, **params):
     def input_slices_from_output_slice(output_slice):
         a_slice = list(output_slice)
         for axis in axes:
-            a_slice.insert(axis, all)
+            a_slice.insert(axis, noneslice)
         return tuple(a_slice),
 
     return sliceableop_update(
@@ -89,9 +89,9 @@ def binop_update(func, old_out, a, b):
     b, b_mask = b
     return sliceableop_update(func, old_out, a, b, output_mask=a_mask & b_mask,
                               input_slices_from_output_slice=lambda output_slice: (
-                                  tuple(s if dim_sz > 1 else all for s, dim_sz in
+                                  tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
                                         zip(output_slice[-np.ndim(a):], np.shape(a))),
-                                  tuple(s if dim_sz > 1 else all for s, dim_sz in
+                                  tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
                                         zip(output_slice[-np.ndim(b):], np.shape(b)))))
 
 
@@ -102,8 +102,8 @@ def dot_update(old_out, a, b):
         lax.dot_p, old_out, a, b, output_mask=onp.equal(
             onp.dot(a_mask.astype(int), b_mask.astype(int)), onp.shape(b_mask)[0]),
         input_slices_from_output_slice=lambda output_slice: (
-            (output_slice[0], all) if len(output_slice) > 0 else (all,),
-            (all, output_slice[1]) if len(output_slice) > 1 else (all,)))
+            (output_slice[0], noneslice) if len(output_slice) > 0 else (noneslice,),
+            (noneslice, output_slice[1]) if len(output_slice) > 1 else (noneslice,)))
 
 
 unops = [lax.sin_p]
@@ -132,11 +132,11 @@ def pad_update(old_out, a, padding_value, padding_config):
 
         for index, (lo, hi, interior) in enumerate(padding_config):
             # TODO:
-            assert interior == 0, "Interior padding not yet supported, expected 0."
+            if interior != 0: raise NotImplementedError("Interior padding not yet supported.")
 
-            lower_slice = [slice(None, lo) if index == i else all
+            lower_slice = [slice(None, lo) if index == i else noneslice
                            for i, s in enumerate(outmask.shape)]
-            higher_slice = [slice(-hi, None) if index == i else all
+            higher_slice = [slice(-hi, None) if index == i else noneslice
                             for i, s in enumerate(outmask.shape)]
 
             outmask[lower_slice] = True
@@ -144,9 +144,8 @@ def pad_update(old_out, a, padding_value, padding_config):
 
         return outval, outmask
 
-    output_mask = onp.ones(tuple(s + lo + hi for s, (lo, hi, _) in zip(a.shape, padding_config)),
-                           dtype=bool)
-    output_mask[tuple([slice(lo, -hi, None) for lo, hi, _ in padding_config])] = a_mask
+    output_mask = onp.pad(a_mask, [(lo, hi) for lo, hi, _ in padding_config],
+                          'constant', constant_values=True)
 
     def input_slices_from_output_slice(output_slice):
         return (tuple(slice(s.start - lo, s.stop - lo, None)
