@@ -24,6 +24,10 @@ def test_reduce_sum_tensor(): check(lambda x: lax._reduce_sum(x, axes=(0, 2)), R
 def test_reduce_min(): check(lambda x: lax._reduce_min(x, axes=(0,)), R(2, 4))
 def test_reduce_max(): check(lambda x: lax._reduce_max(x, axes=(0,)), R(2, 4))
 
+# TODO: Make padding_value an argument:
+def test_pad_vector(): check(lambda x: lax.pad(x, padding_value=np.float64(0.), padding_config=((1,2,0),)), R(2))
+def test_pad_matrix(): check(lambda x: lax.pad(x, padding_value=np.float64(0.), padding_config=((1,2,0),(3,4,0))), R(1,2))
+
 
 # Binops
 def test_add_scalar(): check(lax.add, R(), R())
