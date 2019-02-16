@@ -24,7 +24,7 @@ def _add_at(arr, idxs, vals):
 
 def sliceableop_update(func, old_out, *args, output_mask,
                        input_slices_from_output_slice, **params):
-    """Update rule for operations where slice of their (only) output can be
+    """Update rule for operations where any slice of their (only) output can be
     calculated by applying the operation itself to one slice of each input.
 
     :param input_slices_from_output_slice:
@@ -51,6 +51,29 @@ def unop_update(func, old_out, a):
                               input_slices_from_output_slice=lambda s: (s,))
 
 
+unops = [lax.sin_p]
+for op in unops:
+    fa.update_rules[op] = unop_update(op)
+
+
+@curry
+def binop_update(func, old_out, a, b):
+    a, a_mask = a
+    b, b_mask = b
+    return sliceableop_update(
+        func, old_out, a, b, output_mask=a_mask & b_mask,
+        input_slices_from_output_slice=lambda output_slice: (
+            tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
+                  zip(output_slice[-np.ndim(a):], np.shape(a))),
+            tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
+                  zip(output_slice[-np.ndim(b):], np.shape(b)))))
+
+
+binops = [lax.add_p, lax.sub_p, lax.mul_p]
+for op in binops:
+    fa.update_rules[op] = binop_update(op)
+
+
 @curry
 def reduce_update(func, old_out, a, axes, **params):
     a, a_mask = a
@@ -69,17 +92,9 @@ def reduce_update(func, old_out, a, axes, **params):
         axes=axes, **params)
 
 
-@curry
-def binop_update(func, old_out, a, b):
-    a, a_mask = a
-    b, b_mask = b
-    return sliceableop_update(
-        func, old_out, a, b, output_mask=a_mask & b_mask,
-        input_slices_from_output_slice=lambda output_slice: (
-            tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
-                  zip(output_slice[-np.ndim(a):], np.shape(a))),
-            tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
-                  zip(output_slice[-np.ndim(b):], np.shape(b)))))
+reduce_ops = [lax.reduce_sum_p, lax.reduce_min_p, lax.reduce_max_p]
+for op in reduce_ops:
+    fa.update_rules[op] = reduce_update(op)
 
 
 def dot_update(old_out, a, b):
@@ -93,18 +108,6 @@ def dot_update(old_out, a, b):
             (s[0], noneslice) if len(s) > 0 else (noneslice,),
             (noneslice, s[1]) if len(s) > 1 else (noneslice,)))
 
-
-unops = [lax.sin_p]
-for op in unops:
-    fa.update_rules[op] = unop_update(op)
-
-reduce_ops = [lax.reduce_sum_p, lax.reduce_min_p, lax.reduce_max_p]
-for op in reduce_ops:
-    fa.update_rules[op] = reduce_update(op)
-
-binops = [lax.add_p, lax.sub_p, lax.mul_p]
-for op in binops:
-    fa.update_rules[op] = binop_update(op)
 
 fa.update_rules[lax.dot_p] = dot_update
 
