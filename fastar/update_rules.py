@@ -10,7 +10,6 @@ import fastar.util as util
 
 map = safe_map
 zip = safe_zip
-noneslice = slice(None, None)
 
 
 def _add_at(arr, idxs, vals):
@@ -60,13 +59,15 @@ for op in unops:
 def binop_update(func, old_out, a, b):
     a, a_mask = a
     b, b_mask = b
+
+    def broadcast_slice(s, shape):
+        return tuple(s if dim_sz > 1 else slice(None)
+                     for s, dim_sz in zip(s[-len(shape):], shape))
+
     return sliceableop_update(
         func, old_out, a, b, output_mask=a_mask & b_mask,
-        input_slices_from_output_slice=lambda output_slice: (
-            tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
-                  zip(output_slice[-np.ndim(a):], np.shape(a))),
-            tuple(s if dim_sz > 1 else noneslice for s, dim_sz in
-                  zip(output_slice[-np.ndim(b):], np.shape(b)))))
+        input_slices_from_output_slice=
+        lambda s: (broadcast_slice(s, a.shape), broadcast_slice(s, b.shape)))
 
 
 binops = [lax.add_p, lax.sub_p, lax.mul_p]
@@ -81,7 +82,7 @@ def reduce_update(func, old_out, a, axes, **params):
     def input_slices_from_output_slice(output_slice):
         a_slice = list(output_slice)
         for axis in axes:
-            a_slice.insert(axis, noneslice)
+            a_slice.insert(axis, slice(None))
         return tuple(a_slice),
 
     return sliceableop_update(
@@ -105,8 +106,8 @@ def dot_update(old_out, a, b):
             onp.dot(a_mask.astype(int), b_mask.astype(int)),
             onp.shape(b_mask)[0]),
         input_slices_from_output_slice=lambda s: (
-            (s[0], noneslice) if len(s) > 0 else (noneslice,),
-            (noneslice, s[1]) if len(s) > 1 else (noneslice,)))
+            (s[0], slice(None)) if len(s) > 0 else (slice(None),),
+            (slice(None), s[1]) if len(s) > 1 else (slice(None),)))
 
 
 fa.update_rules[lax.dot_p] = dot_update
@@ -129,7 +130,7 @@ def dot_general_update(old_out, a, b, dimension_numbers):
             other_dims = [i for i in range(ndim) if i not in
                           contracting_dims and i not in batch_dims]
 
-            return tuple(noneslice if i in contracting_dims else
+            return tuple(slice(None) if i in contracting_dims else
                          (output_slice[batch_dims[list(batch_dims).index(i)]]
                           if i in batch_dims else
                           output_slice[other_dims[other_dims.index(i)]])
@@ -150,11 +151,11 @@ fa.update_rules[lax.dot_general_p] = dot_general_update
 def transpose_update(old_out, a, permutation):
     a, a_mask = a
 
-    def inversely_permute_slice(slice):
-        s = [noneslice] * len(slice)
+    def inversely_permute_slice(s):
+        r = [slice(None)] * len(s)
         for i, d in enumerate(permutation):
-            s[d] = slice[i]
-        return tuple(s)
+            r[d] = s[i]
+        return tuple(r)
 
     return sliceableop_update(
         lax.transpose_p, old_out, a,
@@ -190,26 +191,28 @@ def pad_update(old_out, a, padding_value, padding_config):
     padding_value, padding_value_mask = padding_value
     (outval, old_outmask), = old_out
 
-    unpad_slice = tuple(slice(lo, -hi, None) for (lo, hi, _) in padding_config)
+    unpad_slice = tuple(slice(lo, -high, None if interior == 0 else interior + 1)
+                        for (lo, high, interior) in padding_config)
     unpad = lambda x: x[unpad_slice]
 
-    def padding_slices():
+    def pad_slices():
         for index, (lo, hi, interior) in enumerate(padding_config):
-            if interior != 0: raise NotImplementedError(
-                "Interior padding is not yet supported.")
+            def nonoverlapping(s):
+                return unpad_slice[:index] + (s,) + \
+                       tuple([slice(None)] * (old_outmask.ndim - index - 1))
 
-            noneslices = tuple([noneslice] * (old_outmask.ndim - index - 1))
-            yield unpad_slice[:index] + (slice(None, lo),) + noneslices
-            yield unpad_slice[:index] + (slice(-hi, None),) + noneslices
+            yield nonoverlapping(slice(lo))
+            for i in range(interior):
+                yield nonoverlapping(slice(lo + i + 1, -hi, (interior + 1)))
+            yield nonoverlapping(slice(-hi, None))
 
-    old_padding_value_mask = any(
-        onp.any(old_outmask[s]) for s in padding_slices())
+    old_padding_value_mask = any(onp.any(old_outmask[s]) for s in pad_slices())
     new_padding_value_mask = padding_value_mask and not old_padding_value_mask
 
     output_mask = old_outmask.copy()
     output_mask[unpad_slice] = a_mask
     if new_padding_value_mask:
-        for s in padding_slices():
+        for s in pad_slices():
             outval = _add_at(outval, s, np.broadcast_to(padding_value,
                                                         output_mask[s].shape))
             output_mask[s] = True
@@ -218,8 +221,8 @@ def pad_update(old_out, a, padding_value, padding_config):
     input_slices = util.mask_to_slices(new_input_mask)
     for input_slice in input_slices:
         output_slice = tuple(
-            slice(s.start + lo, s.stop + lo, None)
-            for s, (lo, _, _) in zip(input_slice, padding_config))
+            slice(lo + s.start * (interior + 1), lo + s.stop * (interior + 1), interior + 1)
+            for s, (lo, _, interior) in zip(input_slice, padding_config))
         assert np.all(outval[output_slice] == fa.init_value)
         outval = _add_at(outval, output_slice, a[input_slice])
 
@@ -273,7 +276,7 @@ def conv_general_dilated_masked_slice(
     sub_padding = zip(sub_pad_low, sub_pad_high)
     lhs_start = np.where(lhs_start > 0, lhs_start, 0)
     lhs_stop = np.where(lhs_stop > lhs_shape_dil, lhs_shape_dil, lhs_stop)
-    lhs_slice = ((slc[0], slice(None, None)) +
+    lhs_slice = ((slc[0], slice(None)) +
                  tuple(slice(int(s), int(e)) for s, e in
                        zip(lhs_start, lhs_stop)))
     new = lax.conv_general_dilated(lhs[lhs_slice], rhs, window_strides,

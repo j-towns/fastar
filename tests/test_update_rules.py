@@ -44,8 +44,8 @@ def test_dot_matrix_vector(): check(lax.dot, R(3, 2), R(2))
 def test_dot_matrix_matrix(): check(lax.dot, R(3, 2), R(2, 4))
 
 
-def test_dot_general_tensor_matrix(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,),(1,)), ((0,), (0,)))), R(5, 2, 3), R(5, 3))
-def test_dot_general_tensor_tensor(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,),(1,)), ((0,), (0,)))), R(5, 2, 3), R(5, 3, 4))
+def test_dot_general_tensor_matrix(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,), (1,)), ((0,), (0,)))), R(5, 2, 3), R(5, 3))
+def test_dot_general_tensor_tensor(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,), (1,)), ((0,), (0,)))), R(5, 2, 3), R(5, 3, 4))
 
 
 def test_transpose(): check(lambda x: lax.transpose(x, permutation=(1, 2, 0)), R(1, 2, 3))
@@ -56,3 +56,5 @@ def test_reverse(): check(lambda x: lax.rev(x, dimensions=(1, 2)), R(1, 2, 3))
 
 def test_pad_vector(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1,2,0),)), R(2), R())
 def test_pad_matrix(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1,2,0),(3,4,0))), R(1,2), R())
+def test_pad_vector_interior(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1,2,3),)), R(2), R())
+def test_pad_matrix_interior(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1,2,1),(3,4,2))), R(3,2), R())
