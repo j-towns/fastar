@@ -112,6 +112,41 @@ def dot_update(old_out, a, b):
 fa.update_rules[lax.dot_p] = dot_update
 
 
+def dot_general_update(old_out, a, b, dimension_numbers):
+    a, a_mask = a
+    b, b_mask = b
+    ((a_contracting_dims, b_contracting_dims),
+     (a_batch_dims, b_batch_dims)) = dimension_numbers
+
+    contraction_ratio = np.prod([a.shape[d] for d in a_contracting_dims])
+
+    o = lax.dot_general(a_mask.astype(np.float64), b_mask.astype(np.float64),
+                        dimension_numbers=dimension_numbers)
+    output_mask = onp.equal(o, onp.full_like(o, contraction_ratio))
+
+    def input_slices_from_output_slice(output_slice):
+        def result(ndim, contracting_dims, batch_dims):
+            other_dims = [i for i in range(ndim) if i not in
+                          contracting_dims and i not in batch_dims]
+
+            return [noneslice if i in contracting_dims else
+                    (output_slice[batch_dims[list(batch_dims).index(i)]]
+                     if i in batch_dims else
+                     output_slice[other_dims[other_dims.index(i)]])
+                    for i in range(ndim)]
+
+        return (result(a.ndim, a_contracting_dims, a_batch_dims),
+                result(b.ndim, b_contracting_dims, b_batch_dims))
+
+    return sliceableop_update(
+        lax.dot_general_p, old_out, a, b, output_mask=output_mask,
+        input_slices_from_output_slice=input_slices_from_output_slice,
+        dimension_numbers=dimension_numbers)
+
+
+fa.update_rules[lax.dot_general_p] = dot_general_update
+
+
 def transpose_update(old_out, a, permutation):
     a, a_mask = a
 
