@@ -37,7 +37,7 @@ def sliceableop_update(func, old_out, *args, output_mask,
         assert np.all(outval[output_slice] == fa.init_value)
 
         input_slices = input_slices_from_output_slice(output_slice)
-        sliced_inputs = list(arg[s] for arg, s in zip(args, input_slices))
+        sliced_inputs = tuple(arg[s] for arg, s in zip(args, input_slices))
         sliced_output = func.bind(*sliced_inputs, **params)
         outval = _add_at(outval, output_slice, sliced_output)
 
@@ -129,11 +129,11 @@ def dot_general_update(old_out, a, b, dimension_numbers):
             other_dims = [i for i in range(ndim) if i not in
                           contracting_dims and i not in batch_dims]
 
-            return [noneslice if i in contracting_dims else
-                    (output_slice[batch_dims[list(batch_dims).index(i)]]
-                     if i in batch_dims else
-                     output_slice[other_dims[other_dims.index(i)]])
-                    for i in range(ndim)]
+            return tuple(noneslice if i in contracting_dims else
+                         (output_slice[batch_dims[list(batch_dims).index(i)]]
+                          if i in batch_dims else
+                          output_slice[other_dims[other_dims.index(i)]])
+                         for i in range(ndim))
 
         return (result(a.ndim, a_contracting_dims, a_batch_dims),
                 result(b.ndim, b_contracting_dims, b_batch_dims))
@@ -154,7 +154,7 @@ def transpose_update(old_out, a, permutation):
         s = [noneslice] * len(slice)
         for i, d in enumerate(permutation):
             s[d] = slice[i]
-        return s
+        return tuple(s)
 
     return sliceableop_update(
         lax.transpose_p, old_out, a,
@@ -170,10 +170,10 @@ def reverse_update(old_out, a, dimensions):
     a, a_mask = a
 
     def reverse_slice(s):
-        return [slice(-s.stop if s.stop else None,
-                      -s.start if s.start else None, None)
-                if i in dimensions else s
-                for i, s in enumerate(s)]
+        return tuple(slice(-s.stop if s.stop else None,
+                           -s.start if s.start else None, None)
+                     if i in dimensions else s
+                     for i, s in enumerate(s))
 
     return sliceableop_update(
         lax.rev_p, old_out, a,

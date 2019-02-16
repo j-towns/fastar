@@ -43,9 +43,9 @@ def test_dot_vector_vector(): check(lax.dot, R(2), R(2))
 def test_dot_matrix_vector(): check(lax.dot, R(3, 2), R(2))
 def test_dot_matrix_matrix(): check(lax.dot, R(3, 2), R(2, 4))
 
-def test_dot_general_matrix(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,),(1,)), ((0,), (0,)))), R(5, 2, 3), R(5, 3))
-def test_dot_general_matrix_2(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,),(1,)), ((0,), (0,)))), R(5, 2, 3), R(5, 3, 4))
 
+def test_dot_general_tensor_matrix(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,),(1,)), ((0,), (0,)))), R(5, 2, 3), R(5, 3))
+def test_dot_general_tensor_tensor(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,),(1,)), ((0,), (0,)))), R(5, 2, 3), R(5, 3, 4))
 
 
 def test_transpose(): check(lambda x: lax.transpose(x, permutation=(1, 2, 0)), R(1, 2, 3))
