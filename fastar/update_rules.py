@@ -2,7 +2,6 @@ import jax.lax as lax
 import jax.numpy as np
 import numpy as onp
 from jax import vjp
-from jax.abstract_arrays import make_shaped_array
 from jax.util import curry, safe_zip, safe_map, unzip2
 
 import fastar.interpreter as fa
@@ -23,41 +22,23 @@ def _add_at(arr, idxs, vals):
     return arr + take_vjp(vals)[0]
 
 
-def _init_output(func, *args, init_value=0, **params):
-    # TODO: generalize to jaxvals
-    args = map(make_shaped_array, args)
-    abstract_out = func.abstract_eval(*args, **params)
-    outval = lax.full(abstract_out.shape, init_value, abstract_out.dtype)
-    outmask = onp.zeros(abstract_out.shape, bool)
-    return outval, outmask
-
-
 def sliceableop_update(func, old_out, *args, output_mask,
-                       input_slices_from_output_slice,
-                       init_output=_init_output,
-                       sliced_output_from_sliced_inputs=None, init_value=0,
-                       **params):
-    """Applicable to all operations with the following property:
-    Any slice of the output can be calculated from one slice of each input.
-    sliced_output_from_sliced_inputs determines which input slices are used.
-    By default, input slices are combined by the operator 'func'.
-    This behavior can be overriden with input_slices_from_output_slice."""
+                       input_slices_from_output_slice, **params):
+    """Update rule for operations where slice of their (only) output can be
+    calculated by applying the operation itself to one slice of each input.
 
-    if sliced_output_from_sliced_inputs is None:
-        sliced_output_from_sliced_inputs = lambda sliced_inputs: func.bind(
-            *sliced_inputs, **params)
+    :param input_slices_from_output_slice:
+        Specifies which input slices are required for an output slice."""
 
-    outval, old_outmask = old_out[0] if old_out else init_output(
-        func, *args, init_value=init_value, **params)
+    (outval, old_outmask), = old_out
     new_mask = output_mask & ~old_outmask
     output_slices = util.mask_to_slices(new_mask)
     for output_slice in output_slices:
-        input_slices = input_slices_from_output_slice(output_slice)
-        sliced_inputs = list(
-            arg[input_slice] for arg, input_slice in zip(args, input_slices))
-        sliced_output = sliced_output_from_sliced_inputs(sliced_inputs)
+        assert np.all(outval[output_slice] == fa.init_value)
 
-        assert np.all(outval[output_slice] == init_value)
+        input_slices = input_slices_from_output_slice(output_slice)
+        sliced_inputs = list(arg[s] for arg, s in zip(args, input_slices))
+        sliced_output = func.bind(*sliced_inputs, **params)
         outval = _add_at(outval, output_slice, sliced_output)
 
     return fa.Parray((outval, output_mask))
@@ -67,8 +48,7 @@ def sliceableop_update(func, old_out, *args, output_mask,
 def unop_update(func, old_out, a):
     a, a_mask = a
     return sliceableop_update(func, old_out, a, output_mask=a_mask,
-                              input_slices_from_output_slice=lambda
-                                  output_slice: (output_slice,))
+                              input_slices_from_output_slice=lambda s: (s,))
 
 
 @curry
@@ -129,49 +109,6 @@ for op in binops:
 fa.update_rules[lax.dot_p] = dot_update
 
 
-def pad_update(old_out, a, padding_value, padding_config):
-    a, a_mask = a
-    # TODO Support unitialized padding_value.
-    # Is currently assumed to be initialized from the start, mask is ignored:
-    padding_value, _ = padding_value
-
-    def init_output(func, *args, **params):
-        outval, outmask = _init_output(func, *args, **params)
-
-        for index, (lo, hi, interior) in enumerate(padding_config):
-            # TODO:
-            if interior != 0: raise NotImplementedError(
-                "Interior padding not yet supported.")
-
-            lower_slice = [slice(None, lo) if index == i else noneslice
-                           for i, s in enumerate(outmask.shape)]
-            higher_slice = [slice(-hi, None) if index == i else noneslice
-                            for i, s in enumerate(outmask.shape)]
-
-            outmask[lower_slice] = True
-            outmask[higher_slice] = True
-
-        return outval, outmask
-
-    output_mask = onp.pad(a_mask, [(lo, hi) for lo, hi, _ in padding_config],
-                          'constant', constant_values=True)
-
-    def input_slices_from_output_slice(output_slice):
-        return (tuple(slice(s.start - lo, s.stop - lo, None)
-                      for s, (lo, _, _) in zip(output_slice, padding_config)),
-                ())
-
-    return sliceableop_update(
-        lax.pad_p, old_out, a, padding_value, output_mask=output_mask,
-        init_output=init_output, init_value=padding_value,
-        input_slices_from_output_slice=input_slices_from_output_slice,
-        sliced_output_from_sliced_inputs=lambda s: s[0],
-        padding_config=padding_config)
-
-
-fa.update_rules[lax.pad_p] = pad_update
-
-
 def transpose_update(old_out, a, permutation):
     a, a_mask = a
 
@@ -208,6 +145,50 @@ def reverse_update(old_out, a, dimensions):
 
 
 fa.update_rules[lax.rev_p] = reverse_update
+
+
+def pad_update(old_out, a, padding_value, padding_config):
+    a, a_mask = a
+    padding_value, padding_value_mask = padding_value
+    (outval, old_outmask), = old_out
+
+    unpad_slice = tuple(slice(lo, -hi, None) for (lo, hi, _) in padding_config)
+    unpad = lambda x: x[unpad_slice]
+
+    def padding_slices():
+        for index, (lo, hi, interior) in enumerate(padding_config):
+            if interior != 0: raise NotImplementedError(
+                "Interior padding is not yet supported.")
+
+            noneslices = tuple([noneslice] * (old_outmask.ndim - index - 1))
+            yield unpad_slice[:index] + (slice(None, lo),) + noneslices
+            yield unpad_slice[:index] + (slice(-hi, None),) + noneslices
+
+    old_padding_value_mask = any(
+        onp.any(old_outmask[s]) for s in padding_slices())
+    new_padding_value_mask = padding_value_mask and not old_padding_value_mask
+
+    output_mask = old_outmask.copy()
+    output_mask[unpad_slice] = a_mask
+    if new_padding_value_mask:
+        for s in padding_slices():
+            outval = _add_at(outval, s, np.broadcast_to(padding_value,
+                                                        output_mask[s].shape))
+            output_mask[s] = True
+
+    new_input_mask = a_mask & ~unpad(old_outmask)
+    input_slices = util.mask_to_slices(new_input_mask)
+    for input_slice in input_slices:
+        output_slice = tuple(
+            slice(s.start + lo, s.stop + lo, None)
+            for s, (lo, _, _) in zip(input_slice, padding_config))
+        assert np.all(outval[output_slice] == fa.init_value)
+        outval = _add_at(outval, output_slice, a[input_slice])
+
+    return fa.Parray((outval, output_mask))
+
+
+fa.update_rules[lax.pad_p] = pad_update
 
 
 # fa.Parray convolution
@@ -272,7 +253,7 @@ def conv_general_dilated_masked_update(
     rhs, rhs_var_msk = rhs
     if not np.all(rhs_var_msk):
         raise NotImplementedError
-    outval, old_outmsk = old_out[0] if old_out else _init_output(
+    (outval, old_outmsk), = old_out if old_out else fa._init_output(
         lax.conv_general_dilated_p, lhs, rhs,
         window_strides=tuple(window_strides), padding=tuple(padding),
         lhs_dilation=tuple(lhs_dilation), rhs_dilation=tuple(rhs_dilation),

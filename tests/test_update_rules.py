@@ -31,9 +31,8 @@ def test_transpose(): check(lambda x: lax.transpose(x, permutation=(1, 2, 0)), R
 def test_reverse(): check(lambda x: lax.rev(x, dimensions=(1, 2)), R(1, 2, 3))
 
 
-# TODO: Make padding_value an argument:
-def test_pad_vector(): check(lambda x: lax.pad(x, padding_value=np.float64(0.), padding_config=((1,2,0),)), R(2))
-def test_pad_matrix(): check(lambda x: lax.pad(x, padding_value=np.float64(0.), padding_config=((1,2,0),(3,4,0))), R(1,2))
+def test_pad_vector(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1,2,0),)), R(2), R())
+def test_pad_matrix(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1,2,0),(3,4,0))), R(1,2), R())
 
 # Binops
 def test_add_scalar(): check(lax.add, R(), R())

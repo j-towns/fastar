@@ -1,3 +1,5 @@
+from operator import itemgetter
+
 from jax.api_util import (pytree_fun_to_jaxtupletree_fun,
                           pytree_to_jaxtupletree, wraps)
 import jax.core as jc
@@ -5,8 +7,11 @@ import jax.interpreters.xla as xla
 import jax.interpreters.partial_eval as pe
 import jax.linear_util as lu
 from jax.util import safe_map, unzip2, partial
+from jax.abstract_arrays import make_shaped_array
+from jax import lax
 
 import fastar.util as util
+import numpy as np
 
 map = safe_map
 
@@ -28,6 +33,16 @@ def make_jaxpr(f):
 
     jaxpr_maker.__name__ = "make_jaxpr({})".format(jaxpr_maker.__name__)
     return jaxpr_maker
+
+init_value = 0
+
+def _init_output(func, *args, **params):
+    # TODO: generalize to jaxvals
+    args = map(make_shaped_array, args)
+    abstract_out = func.abstract_eval(*args, **params)
+    outval = lax.full(abstract_out.shape, init_value, abstract_out.dtype)
+    outmask = np.zeros(abstract_out.shape, bool)
+    return (outval, outmask),
 
 # Populate the cache
 def firstpass(jaxpr, consts, *args):
@@ -52,7 +67,8 @@ def firstpass(jaxpr, consts, *args):
         in_vals = map(read, eqn.invars)
         if eqn.bound_subjaxprs:
             raise NotImplementedError
-        ans = get_update(eqn.primitive)(None, *in_vals, **eqn.params)
+        output = _init_output(eqn.primitive, *map(itemgetter(0), args), **eqn.params)
+        ans = get_update(eqn.primitive)(output, *in_vals, **eqn.params)
         outvals = list(ans) if eqn.destructure else [ans]
         map(write, eqn.outvars, outvals)
     return read(jaxpr.outvar), env
