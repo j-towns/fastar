@@ -35,7 +35,9 @@ def check_ans(ans_old, ans):
     assert is_subset(np.bool_(ans), mask)
     assert np.all(np.where(mask_old, ans == ans_old, True))
 
-def check_fun(rng, fun, *args):
+def check_custom_input(fun, inputs_from_rng):
+    rng = np.random.RandomState(0)
+    args = inputs_from_rng(rng)
     ans = fun(*args)
     fun_ac = accelerate(fun)
     masks = increasing_masks(rng, *args)
@@ -49,3 +51,6 @@ def check_fun(rng, fun, *args):
     assert np.all(mask)
     assert np.allclose(ans, ans_)
     assert ans.dtype == ans_.dtype
+
+def check(fun, *shapes):
+    check_custom_input(fun, lambda rng: tuple(rng.randn(*shape) for shape in shapes))
