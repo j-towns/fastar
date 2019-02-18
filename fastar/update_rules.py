@@ -151,17 +151,8 @@ fa.update_rules[lax.dot_general_p] = dot_general_update
 def transpose_update(old_out, a, permutation):
     a, a_mask = a
 
-    def inversely_permute_slice(s):
-        r = [slice(None)] * len(s)
-        for i, d in enumerate(permutation):
-            r[d] = s[i]
-        return tuple(r)
-
-    return sliceableop_update(
-        lax.transpose_p, old_out, a,
-        output_mask=onp.transpose(a_mask, permutation),
-        input_slices_from_output_slice=lambda s: (inversely_permute_slice(s),),
-        permutation=permutation)
+    return fa.Parray((np.transpose(a, permutation),
+                      onp.transpose(a_mask, permutation)))
 
 
 fa.update_rules[lax.transpose_p] = transpose_update
@@ -170,17 +161,8 @@ fa.update_rules[lax.transpose_p] = transpose_update
 def reverse_update(old_out, a, dimensions):
     a, a_mask = a
 
-    def reverse_slice(s):
-        return tuple(slice(-s.stop if s.stop else None,
-                           -s.start if s.start else None, None)
-                     if i in dimensions else s
-                     for i, s in enumerate(s))
-
-    return sliceableop_update(
-        lax.rev_p, old_out, a,
-        output_mask=onp.flip(a_mask, dimensions),
-        input_slices_from_output_slice=lambda s: (reverse_slice(s),),
-        dimensions=dimensions)
+    return fa.Parray((lax.rev(a, dimensions),
+                      lax.rev(a_mask, dimensions)))
 
 
 fa.update_rules[lax.rev_p] = reverse_update

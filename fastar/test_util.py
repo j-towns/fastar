@@ -15,7 +15,7 @@ def increasing_masks(rng, *arrs_raw):
         mask = np.copy(masks[argnum])
         mask[idx] = True
         masks[argnum] = mask
-        arrs.append(tuple(Parray((arr, mask))
+        arrs.append(tuple(Parray((arr * mask, mask))
                           for arr, mask in zip(arrs_raw, masks)))
     return arrs
 
@@ -38,9 +38,10 @@ def check_ans(ans_old, ans):
 def check_fun(rng, fun, *args):
     ans = fun(*args)
     fun_ac = accelerate(fun)
+    masks = increasing_masks(rng, *args)
     args_ = [Parray((arg, util.false_mask(arg))) for arg in args]
     ans_old, fun_ac = fun_ac(*args_)
-    for args in increasing_masks(rng, *args):
+    for args in masks:
         ans_, fun_ac = fun_ac(*args)
         check_ans(ans_old, ans_)
         ans_old = ans_
