@@ -35,22 +35,24 @@ def check_ans(ans_old, ans):
     assert is_subset(np.bool_(ans), mask)
     assert np.all(np.where(mask_old, ans == ans_old, True))
 
-def check_custom_input(fun, inputs_from_rng):
+def check_custom_input(fun, inputs_from_rng, rtol=1e-5, runs=5):
     rng = np.random.RandomState(0)
-    args = inputs_from_rng(rng)
-    ans = fun(*args)
-    fun_ac = accelerate(fun)
-    masks = increasing_masks(rng, *args)
-    args_ = [Parray((arg, util.false_mask(arg))) for arg in args]
-    ans_old, fun_ac = fun_ac(*args_)
-    for args in masks:
-        ans_, fun_ac = fun_ac(*args)
-        check_ans(ans_old, ans_)
-        ans_old = ans_
-    ans_, mask = ans_
-    assert np.all(mask)
-    assert np.allclose(ans, ans_)
-    assert ans.dtype == ans_.dtype
+    for _ in range(runs):
+        args = inputs_from_rng(rng)
+        ans = fun(*args)
+        fun_ac = accelerate(fun)
+        masks = increasing_masks(rng, *args)
+        args_ = [Parray((arg, util.false_mask(arg))) for arg in args]
+        ans_old, fun_ac = fun_ac(*args_)
+        for args in masks:
+            ans_, fun_ac = fun_ac(*args)
+            check_ans(ans_old, ans_)
+            ans_old = ans_
+        ans_, mask = ans_
+        assert np.all(mask)
+        assert np.allclose(ans, ans_, rtol=rtol)
+        assert ans.dtype == ans_.dtype
 
-def check(fun, *shapes):
-    check_custom_input(fun, lambda rng: tuple(rng.randn(*shape) for shape in shapes))
+def check(fun, *shapes, rtol=1e-5):
+    check_custom_input(fun, lambda rng: tuple(rng.randn(*shape)
+                                              for shape in shapes), rtol=rtol)

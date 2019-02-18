@@ -10,7 +10,7 @@ def test_cos(): check(lax.cos, (1, 2))
 def test_sin(): check(lax.sin, (1, 2))
 def test_exp(): check(lax.exp, (1, 2))
 def test_floor(): check(lax.floor, (1, 2))
-def test_log(): check(lax.log, (1, 2))
+def test_log(): check_custom_input(lax.log, lambda rng: np.abs(rng.randn(1, 2)))
 def test_neg(): check(lax.neg, (1, 2))
 def test_sign(): check(lax.sign, (1, 2))
 def test_tanh(): check(lax.tanh, (1, 2))
@@ -49,8 +49,8 @@ def test_dot_matrix_vector(): check(lax.dot, (3, 2), (2,))
 def test_dot_matrix_matrix(): check(lax.dot, (3, 2), (2, 4))
 
 
-def test_dot_general_tensor_matrix(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,), (1,)), ((0,), (0,)))), (5, 2, 3), (5, 3))
-def test_dot_general_tensor_tensor(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,), (1,)), ((0,), (0,)))), (5, 2, 3), (5, 3, 4))
+def test_dot_general_tensor_matrix(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,), (1,)), ((0,), (0,)))), (1, 2, 3), (1, 3))
+def test_dot_general_tensor_tensor(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,), (1,)), ((0,), (0,)))), (1, 2, 3), (1, 3, 4), rtol=1e-4)
 
 
 def test_transpose(): check(lambda x: lax.transpose(x, permutation=(1, 2, 0)), (1, 2, 3))

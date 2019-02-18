@@ -1,8 +1,11 @@
+from operator import itemgetter
+
 import jax.lax as lax
 import jax.numpy as np
 import numpy as onp
 from jax import vjp
 from jax.util import curry, safe_zip, safe_map, unzip2
+from jax.abstract_arrays import make_shaped_array
 
 import fastar.interpreter as fa
 import fastar.primitives as primitives
@@ -11,6 +14,15 @@ import fastar.util as util
 map = safe_map
 zip = safe_zip
 
+init_value = 0
+
+def _init_output(func, *args, **params):
+    # TODO: generalize to jaxvals
+    args = map(make_shaped_array, args)
+    abstract_out = func.abstract_eval(*args, **params)
+    outval = lax.full(abstract_out.shape, init_value, abstract_out.dtype)
+    outmask = onp.zeros(abstract_out.shape, bool)
+    return (outval, outmask),
 
 def _add_at(arr, idxs, vals):
     def take(arr, idxs):
@@ -29,11 +41,13 @@ def sliceableop_update(func, old_out, *args, output_mask,
     :param input_slices_from_output_slice:
         Specifies which input slices are required for an output slice."""
 
-    (outval, old_outmask), = old_out
+    (outval, old_outmask), = _init_output(func, *args, **params) if \
+        old_out is None else old_out
+
     new_mask = output_mask & ~old_outmask
     output_slices = util.mask_to_slices(new_mask)
     for output_slice in output_slices:
-        assert np.all(outval[output_slice] == fa.init_value)
+        assert np.all(outval[output_slice] == init_value)
 
         input_slices = input_slices_from_output_slice(output_slice)
         sliced_inputs = tuple(arg[s] for arg, s in zip(args, input_slices))
@@ -150,22 +164,24 @@ def dot_general_update(old_out, a, b, dimension_numbers):
 fa.update_rules[lax.dot_general_p] = dot_general_update
 
 @curry
-def redirect_update(func, old_out, *args, **params):
+def rearrange_update(func, old_out, *args, **params):
     args, args_mask = zip(*args)
 
     return fa.Parray((func.bind(*args, **params),
                       func.bind(*args_mask, **params)))
 
 
-redirect_ops = [lax.transpose_p, lax.rev_p, lax.reshape_p]
+rearrange_ops = [lax.reshape_p, lax.transpose_p, lax.rev_p]
 
-for op in redirect_ops:
-    fa.update_rules[op] = redirect_update(op)
+for op in rearrange_ops:
+    fa.update_rules[op] = rearrange_update(op)
 
 def pad_update(old_out, a, padding_value, padding_config):
     a, a_mask = a
     padding_value, padding_value_mask = padding_value
-    (outval, old_outmask), = old_out
+    (outval, old_outmask), = _init_output(lax.pad_p, a, padding_value,
+                                          padding_config=padding_config) if \
+        old_out is None else old_out
 
     unpad_slice = tuple(slice(lo, -high, None if interior == 0 else interior + 1)
                         for (lo, high, interior) in padding_config)
@@ -197,9 +213,10 @@ def pad_update(old_out, a, padding_value, padding_config):
     input_slices = util.mask_to_slices(new_input_mask)
     for input_slice in input_slices:
         output_slice = tuple(
-            slice(lo + s.start * (interior + 1), lo + s.stop * (interior + 1), interior + 1)
+            slice(lo + s.start * (interior + 1),
+                  lo + s.stop * (interior + 1), interior + 1)
             for s, (lo, _, interior) in zip(input_slice, padding_config))
-        assert np.all(outval[output_slice] == fa.init_value)
+        assert np.all(outval[output_slice] == init_value)
         outval = _add_at(outval, output_slice, a[input_slice])
 
     return fa.Parray((outval, output_mask))
@@ -270,7 +287,7 @@ def conv_general_dilated_masked_update(
     rhs, rhs_var_msk = rhs
     if not np.all(rhs_var_msk):
         raise NotImplementedError
-    (outval, old_outmsk), = old_out if old_out else fa._init_output(
+    (outval, old_outmsk), = old_out if old_out else _init_output(
         lax.conv_general_dilated_p, lhs, rhs,
         window_strides=tuple(window_strides), padding=tuple(padding),
         lhs_dilation=tuple(lhs_dilation), rhs_dilation=tuple(rhs_dilation),
