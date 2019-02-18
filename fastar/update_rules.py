@@ -50,7 +50,8 @@ def unop_update(func, old_out, a):
                               input_slices_from_output_slice=lambda s: (s,))
 
 
-unops = [lax.sin_p]
+unops = [lax.abs_p, lax.ceil_p, lax.cos_p, lax.sin_p, lax.exp_p,
+         lax.floor_p, lax.log_p, lax.neg_p, lax.sign_p, lax.tanh_p]
 for op in unops:
     fa.update_rules[op] = unop_update(op)
 
@@ -70,7 +71,8 @@ def binop_update(func, old_out, a, b):
         lambda s: (broadcast_slice(s, a.shape), broadcast_slice(s, b.shape)))
 
 
-binops = [lax.add_p, lax.sub_p, lax.mul_p]
+binops = [lax.add_p, lax.sub_p, lax.mul_p, lax.div_p,
+          lax.rem_p, lax.max_p, lax.min_p]
 for op in binops:
     fa.update_rules[op] = binop_update(op)
 
@@ -147,26 +149,18 @@ def dot_general_update(old_out, a, b, dimension_numbers):
 
 fa.update_rules[lax.dot_general_p] = dot_general_update
 
+@curry
+def redirect_update(func, old_out, *args, **params):
+    args, args_mask = zip(*args)
 
-def transpose_update(old_out, a, permutation):
-    a, a_mask = a
-
-    return fa.Parray((np.transpose(a, permutation),
-                      onp.transpose(a_mask, permutation)))
-
-
-fa.update_rules[lax.transpose_p] = transpose_update
+    return fa.Parray((func.bind(*args, **params),
+                      func.bind(*args_mask, **params)))
 
 
-def reverse_update(old_out, a, dimensions):
-    a, a_mask = a
+redirect_ops = [lax.transpose_p, lax.rev_p, lax.reshape_p]
 
-    return fa.Parray((lax.rev(a, dimensions),
-                      lax.rev(a_mask, dimensions)))
-
-
-fa.update_rules[lax.rev_p] = reverse_update
-
+for op in redirect_ops:
+    fa.update_rules[op] = redirect_update(op)
 
 def pad_update(old_out, a, padding_value, padding_config):
     a, a_mask = a

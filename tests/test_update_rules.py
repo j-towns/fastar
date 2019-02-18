@@ -11,7 +11,17 @@ check = functools.partial(check_fun, rng)
 
 
 # Unops
+def test_abs(): check(lax.abs, R(1, 2))
+def test_ceil(): check(lax.ceil, R(1, 2))
+def test_cos(): check(lax.cos, R(1, 2))
 def test_sin(): check(lax.sin, R(1, 2))
+def test_exp(): check(lax.exp, R(1, 2))
+def test_floor(): check(lax.floor, R(1, 2))
+def test_log(): check(lax.log, R(1, 2))
+def test_neg(): check(lax.neg, R(1, 2))
+def test_sign(): check(lax.sign, R(1, 2))
+def test_tanh(): check(lax.tanh, R(1, 2))
+
 
 # Binops
 def test_add_scalar(): check(lax.add, R(), R())
@@ -23,9 +33,11 @@ def test_add_matrix(): check(lax.add, R(1, 2), R(3, 1))
 
 
 def test_sub(): check(lax.sub, R(1, 2), R(3, 1))
-
-
 def test_mul(): check(lax.mul, R(1, 2), R(3, 1))
+def test_div(): check(lax.div, R(1, 2), R(3, 1))
+def test_rem(): check(lax.rem, R(1, 2), R(3, 1))
+def test_max(): check(lax.max, R(1, 2), R(3, 1))
+def test_min(): check(lax.min, R(1, 2), R(3, 1))
 
 
 def test_reduce_sum_vector(): check(lambda x: lax._reduce_sum(x, axes=(0,)), R(4))
@@ -49,9 +61,8 @@ def test_dot_general_tensor_tensor(): check(lambda x, y: lax.dot_general(x, y, d
 
 
 def test_transpose(): check(lambda x: lax.transpose(x, permutation=(1, 2, 0)), R(1, 2, 3))
-
-
 def test_reverse(): check(lambda x: lax.rev(x, dimensions=(1, 2)), R(1, 2, 3))
+def test_reshape(): check(lambda x: lax.reshape(x, new_sizes=(3,2), dimensions=(1, 0, 2)), R(1, 2, 3))
 
 
 def test_pad_vector(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1,2,0),)), R(2), R())
