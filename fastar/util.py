@@ -34,7 +34,7 @@ def contains_rectangle(idx_tree, rectangle):
         return all(n in idx_tree for n in range(start, stop))
 
 def remove_rectangle(idx_tree, rectangle):
-    (start, stop), *rectangle = rectangle
+    (start, stop), rectangle = rectangle[0], rectangle[1:]
     if rectangle:
         new_tree = {}
         for root, branch in idx_tree.items():
