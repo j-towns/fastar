@@ -15,6 +15,7 @@ zip = safe_zip
 
 init_value = 0
 
+
 def _init_output(func, *args, **params):
     # TODO: generalize to jaxvals
     args = map(make_shaped_array, args)
@@ -22,6 +23,7 @@ def _init_output(func, *args, **params):
     outval = lax.full(abstract_out.shape, init_value, abstract_out.dtype)
     outmask = onp.zeros(abstract_out.shape, bool)
     return (outval, outmask),
+
 
 def _add_at(arr, idxs, vals):
     def take(arr, idxs):
@@ -138,7 +140,7 @@ def dot_general_update(old_out, a, b, dimension_numbers):
 
     o = lax.dot_general(a_mask.astype(np.float64), b_mask.astype(np.float64),
                         dimension_numbers=dimension_numbers)
-    output_mask = onp.equal(o, onp.full_like(o, contraction_ratio))
+    output_mask = onp.equal(onp.array(o), onp.full_like(o, contraction_ratio))
 
     def input_slices_from_output_slice(output_slice):
         def result(ndim, contracting_dims, batch_dims):
