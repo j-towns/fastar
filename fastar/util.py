@@ -23,7 +23,7 @@ def to_tree(idxs):
 
 def contains_rectangle(idx_tree, rectangle):
     """
-    Return True if rectangle is contained in idx_tree, else false.
+    Return True if rectangle is contained in idx_tree, else False.
     """
     (start, stop), rectangle = rectangle[0], rectangle[1:]
     if rectangle:
