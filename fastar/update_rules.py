@@ -32,8 +32,8 @@ def _add_at(arr, idxs, vals):
     return arr + take_vjp(vals)[0]
 
 
-def sliceableop_update(func, old_out, *args, output_mask,
-                       input_slices_from_output_slice, **params):
+def sliceableop_update(func, old_out, output_mask,
+                       input_slices_from_output_slice, *args, **params):
     """Update rule for operations where any slice of their (only) output can be
     calculated by applying the operation itself to one slice of each input.
 
@@ -59,8 +59,7 @@ def sliceableop_update(func, old_out, *args, output_mask,
 @curry
 def unop_update(func, old_out, a):
     a, a_mask = a
-    return sliceableop_update(func, old_out, a, output_mask=a_mask,
-                              input_slices_from_output_slice=lambda s: (s,))
+    return sliceableop_update(func, old_out, a_mask, lambda s: (s,), a)
 
 
 unops = [lax.abs_p, lax.ceil_p, lax.cos_p, lax.sin_p, lax.exp_p,
@@ -79,9 +78,9 @@ def binop_update(func, old_out, a, b):
                      for s, dim_sz in zip(s[-len(shape):], shape))
 
     return sliceableop_update(
-        func, old_out, a, b, output_mask=a_mask & b_mask,
-        input_slices_from_output_slice=
-        lambda s: (broadcast_slice(s, a.shape), broadcast_slice(s, b.shape)))
+        func, old_out, a_mask & b_mask,
+        lambda s: (broadcast_slice(s, a.shape), broadcast_slice(s, b.shape)),
+        a, b)
 
 
 binops = [lax.add_p, lax.sub_p, lax.mul_p, lax.div_p,
@@ -101,11 +100,10 @@ def reduce_update(func, old_out, a, axes, **params):
         return tuple(a_slice),
 
     return sliceableop_update(
-        func, old_out, a,
-        output_mask=onp.equal(onp.sum(a_mask.astype(int), axis=axes),
-                              onp.prod([a_mask.shape[axis] for axis in axes])),
-        input_slices_from_output_slice=input_slices_from_output_slice,
-        axes=axes, **params)
+        func, old_out, onp.equal(onp.sum(a_mask.astype(int), axis=axes),
+                                 onp.prod([a_mask.shape[axis]
+                                           for axis in axes])),
+        input_slices_from_output_slice, a, axes=axes, **params)
 
 
 reduce_ops = [lax.reduce_sum_p, lax.reduce_min_p, lax.reduce_max_p]
@@ -117,13 +115,13 @@ def dot_update(old_out, a, b):
     a, a_mask = a
     b, b_mask = b
     return sliceableop_update(
-        lax.dot_p, old_out, a, b, output_mask=onp.equal(
+        lax.dot_p, old_out, onp.equal(
             onp.dot(a_mask.astype(int), b_mask.astype(int)),
             onp.shape(b_mask)[0]),
-        input_slices_from_output_slice=lambda s: (
-            (s[0], slice(None)) if len(s) > 0 else (slice(None),),
-            (slice(None), s[1]) if len(s) > 1 else (slice(None),)))
-
+        lambda s: ((s[0], slice(None)) if len(s) > 0 else (slice(None),),
+                   (slice(None), s[1]) if len(s) > 1 else (slice(None),)),
+        a, b)
+ 
 
 fa.update_rules[lax.dot_p] = dot_update
 
@@ -155,8 +153,8 @@ def dot_general_update(old_out, a, b, dimension_numbers):
                 result(b.ndim, b_contracting_dims, b_batch_dims))
 
     return sliceableop_update(
-        lax.dot_general_p, old_out, a, b, output_mask=output_mask,
-        input_slices_from_output_slice=input_slices_from_output_slice,
+        lax.dot_general_p, old_out, output_mask,
+        input_slices_from_output_slice, a, b,
         dimension_numbers=dimension_numbers)
 
 
