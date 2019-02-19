@@ -25,7 +25,7 @@ def contains_rectangle(idx_tree, rectangle):
     """
     Return True if rectangle is contained in idx_tree, else false.
     """
-    (start, stop), *rectangle = rectangle
+    (start, stop), rectangle = rectangle[0], rectangle[1:]
     if rectangle:
         return all(n in idx_tree and contains_rectangle(idx_tree[n], rectangle)
                    for n in range(start, stop))
