@@ -53,6 +53,6 @@ def check_custom_input(fun, inputs_from_rng, rtol=1e-5, runs=5):
         assert np.allclose(ans, ans_, rtol=rtol)
         assert ans.dtype == ans_.dtype
 
-def check(fun, *shapes, rtol=1e-5):
+def check(fun, *shapes, **kwargs):
     check_custom_input(fun, lambda rng: tuple(rng.randn(*shape)
-                                              for shape in shapes), rtol=rtol)
+                                              for shape in shapes), **kwargs)
