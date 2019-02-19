@@ -59,7 +59,7 @@ def find_rectangle(idx_tree):
     """
     if type(idx_tree) is dict:
         idx_tree = copy(idx_tree)
-        start, *roots = sorted(idx_tree.keys())
+        start = min(idx_tree.keys())
         rect = find_rectangle(idx_tree[start])
         stop = start + 1
         while stop in idx_tree and contains_rectangle(idx_tree[stop], rect):
