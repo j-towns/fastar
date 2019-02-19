@@ -121,7 +121,7 @@ def dot_update(old_out, a, b):
         lambda s: ((s[0], slice(None)) if len(s) > 0 else (slice(None),),
                    (slice(None), s[1]) if len(s) > 1 else (slice(None),)),
         a, b)
- 
+
 
 fa.update_rules[lax.dot_p] = dot_update
 
