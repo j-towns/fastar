@@ -1,3 +1,5 @@
+from operator import itemgetter
+
 from jax.api_util import (pytree_fun_to_jaxtupletree_fun,
                           pytree_to_jaxtupletree, wraps)
 import jax.core as jc
