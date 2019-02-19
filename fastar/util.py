@@ -23,9 +23,9 @@ def to_tree(idxs):
 
 def contains_rectangle(idx_tree, rectangle):
     """
-    Return True if rectangle is contained in idx_tree, else false.
+    Return True if rectangle is contained in idx_tree, else False.
     """
-    (start, stop), *rectangle = rectangle
+    (start, stop), rectangle = rectangle[0], rectangle[1:]
     if rectangle:
         return all(n in idx_tree and contains_rectangle(idx_tree[n], rectangle)
                    for n in range(start, stop))
@@ -34,7 +34,7 @@ def contains_rectangle(idx_tree, rectangle):
         return all(n in idx_tree for n in range(start, stop))
 
 def remove_rectangle(idx_tree, rectangle):
-    (start, stop), *rectangle = rectangle
+    (start, stop), rectangle = rectangle[0], rectangle[1:]
     if rectangle:
         new_tree = {}
         for root, branch in idx_tree.items():
@@ -59,7 +59,7 @@ def find_rectangle(idx_tree):
     """
     if type(idx_tree) is dict:
         idx_tree = copy(idx_tree)
-        start, *roots = sorted(idx_tree.keys())
+        start = min(idx_tree.keys())
         rect = find_rectangle(idx_tree[start])
         stop = start + 1
         while stop in idx_tree and contains_rectangle(idx_tree[stop], rect):
