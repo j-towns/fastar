@@ -1,5 +1,7 @@
 import jax.lax as lax
 import numpy as np
+import pytest
+
 from fastar.test_util import check, check_custom_input
 
 
@@ -62,3 +64,9 @@ def test_pad_vector(): check(lambda x, padding_value: lax.pad(x, padding_value, 
 def test_pad_matrix(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1, 2, 0),(3, 4, 0))), (1, 2), ())
 def test_pad_vector_interior(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1, 2, 3),)), (2,), ())
 def test_pad_matrix_interior(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1, 2, 1),(3, 4, 2))), (3, 2), ())
+
+@pytest.mark.parametrize('filter_shape', [(3, 2), (1, 1)])
+@pytest.mark.parametrize('strides', [[1, 1], [1, 2], [2, 1]])
+@pytest.mark.parametrize('padding', ['SAME', 'VALID'])
+def test_convolution(filter_shape, strides, padding):
+    check(lambda lhs: lax.conv(lhs, np.random.RandomState(0).randn(3, 2, *filter_shape), strides, padding), (1, 2, 5, 5))
