@@ -226,7 +226,7 @@ def pad_update(old_out, input, padding_value, padding_config):
                                                         output_mask[s].shape))
             output_mask[s] = True
 
-    cropped_input_new_mask = input_mask[input_crop_slice] & ~unpad(old_outmask)
+    cropped_input_new_mask = cropped_input_mask & ~unpad(old_outmask)
     cropped_input_slices = util.mask_to_slices(cropped_input_new_mask)
     for cropped_input_slice in cropped_input_slices:
         output_slice = tuple(
