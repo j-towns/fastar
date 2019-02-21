@@ -187,7 +187,7 @@ def pad_update(old_out, input, padding_value, padding_config):
         old_out is None else old_out
 
     unpad_slice = tuple(
-        slice(lo if lo > 0 else 0,
+        slice(lo if lo > 0 else None,
               -hi if hi > 0 else None,
               None if interior == 0 else interior + 1)
         for (lo, hi, interior) in padding_config)
@@ -214,7 +214,7 @@ def pad_update(old_out, input, padding_value, padding_config):
     output_mask = old_outmask.copy()
 
     input_crop_slice = tuple(
-        slice(-lo if lo < 0 else 0,
+        slice(-lo if lo < 0 else None,
               hi if hi < 0 else None)
         for (lo, hi, _) in padding_config)
 
