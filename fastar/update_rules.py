@@ -175,16 +175,22 @@ for op in rearrange_ops:
     fa.update_rules[op] = rearrange_update(op)
 
 
-def pad_update(old_out, a, padding_value, padding_config):
-    a, a_mask = a
+def pad_update(old_out, input, padding_value, padding_config):
+    for (lo, hi, interior) in padding_config:
+        if interior > 0 and (lo < 0 or hi < 0): raise NotImplementedError(
+            "Interior and negative padding on same axis not yet implemented.")
+
+    input, input_mask = input
     padding_value, padding_value_mask = padding_value
-    (outval, old_outmask), = _init_output(lax.pad_p, a, padding_value,
+    (outval, old_outmask), = _init_output(lax.pad_p, input, padding_value,
                                           padding_config=padding_config) if \
         old_out is None else old_out
 
     unpad_slice = tuple(
-        slice(lo, -high, None if interior == 0 else interior + 1)
-        for (lo, high, interior) in padding_config)
+        slice(lo if lo > 0 else 0,
+              -hi if hi > 0 else None,
+              None if interior == 0 else interior + 1)
+        for (lo, hi, interior) in padding_config)
     unpad = lambda x: x[unpad_slice]
 
     def pad_slices():
@@ -193,31 +199,51 @@ def pad_update(old_out, a, padding_value, padding_config):
                 return unpad_slice[:index] + (s,) + \
                        tuple([slice(None)] * (old_outmask.ndim - index - 1))
 
-            yield nonoverlapping(slice(lo))
+            if lo > 0:
+                yield nonoverlapping(slice(lo))
+
             for i in range(interior):
                 yield nonoverlapping(slice(lo + i + 1, -hi, (interior + 1)))
-            yield nonoverlapping(slice(-hi, None))
+
+            if hi > 0:
+                yield nonoverlapping(slice(-hi, None))
 
     old_padding_value_mask = any(onp.any(old_outmask[s]) for s in pad_slices())
     new_padding_value_mask = padding_value_mask and not old_padding_value_mask
 
     output_mask = old_outmask.copy()
-    output_mask[unpad_slice] = a_mask
+
+    input_crop_slice = tuple(
+        slice(-lo if lo < 0 else 0,
+              hi if hi < 0 else None)
+        for (lo, hi, _) in padding_config)
+
+    cropped_input_mask = input_mask[input_crop_slice]
+    output_mask[unpad_slice] = cropped_input_mask
     if new_padding_value_mask:
         for s in pad_slices():
             outval = _add_at(outval, s, np.broadcast_to(padding_value,
                                                         output_mask[s].shape))
             output_mask[s] = True
 
-    new_input_mask = a_mask & ~unpad(old_outmask)
-    input_slices = util.mask_to_slices(new_input_mask)
-    for input_slice in input_slices:
+    cropped_input_new_mask = input_mask[input_crop_slice] & ~unpad(old_outmask)
+    cropped_input_slices = util.mask_to_slices(cropped_input_new_mask)
+    for cropped_input_slice in cropped_input_slices:
         output_slice = tuple(
-            slice(lo + s.start * (interior + 1),
-                  lo + s.stop * (interior + 1), interior + 1)
-            for s, (lo, _, interior) in zip(input_slice, padding_config))
+            slice((lo if lo > 0 else 0) + s.start * (interior + 1),
+                  (lo if lo > 0 else 0) + s.stop * (interior + 1),
+                  interior + 1)
+            for s, (lo, _, interior) in
+            zip(cropped_input_slice, padding_config))
+
+        input_slice = tuple(
+            slice(s.start + (-lo if lo < 0 else 0),
+                  s.stop + (-lo if lo < 0 else 0), s.step)
+            for s, (lo, _, interior) in
+            zip(cropped_input_slice, padding_config))
+
         assert np.all(outval[output_slice] == init_value)
-        outval = _add_at(outval, output_slice, a[input_slice])
+        outval = _add_at(outval, output_slice, input[input_slice])
 
     return fa.Parray((outval, output_mask))
 
