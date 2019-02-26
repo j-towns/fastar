@@ -253,8 +253,6 @@ fa.update_rules[lax.pad_p] = pad_update
 
 def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
     # Note: we assume that rhs_mask doesn't change
-    in_chan = onp.shape(lhs_mask)[1]
-    assert in_chan == onp.shape(rhs_mask)[1]
     lhs_mask, rhs_mask = np.float32(lhs_mask), np.float32(rhs_mask)
     out = onp.array(lax.conv_general_dilated(lhs_mask, rhs_mask, **params))
     full_out = onp.array(lax.conv_general_dilated(
@@ -265,12 +263,17 @@ def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
 def conv_general_dilated_update_slice_op(
         slc, out, lhs, rhs, window_strides, padding,
         lhs_dilation=None, rhs_dilation=None, dimension_numbers=None):
-    lhs_shape, rhs_shape = np.shape(lhs), np.shape(rhs)
+    permute = lambda it, perm: [it[i] for i in perm]
+    unpermute = lambda it, perm: [it[i] for i in onp.argsort(perm)]
+    lhs_spec, rhs_spec, out_spec = dimension_numbers
+    lhs_shape = permute(np.shape(lhs), lhs_spec)
+    rhs_shape = permute(np.shape(rhs), rhs_spec)
+    out_slc = permute(slc, out_spec)
     pad_low, pad_high = unzip2(padding)
     window_shape = lax._dilate_shape(rhs_shape, rhs_dilation)[2:]
     lhs_shape_dil = lax._dilate_shape(lhs_shape, lhs_dilation)[2:]
-    out_start = onp.array([s.start for s in slc[2:]])
-    out_stop = onp.array([s.stop for s in slc[2:]])
+    out_start = onp.array([s.start for s in out_slc[2:]])
+    out_stop =  onp.array([s.stop  for s in out_slc[2:]])
     out_start = out_start * np.array(window_strides)
     out_stop = out_stop * np.array(window_strides)
     lhs_start_dilated = onp.subtract(out_start, pad_low)
@@ -293,11 +296,11 @@ def conv_general_dilated_update_slice_op(
     sub_padding = zip(sub_pad_low, sub_pad_high)
     lhs_start = np.where(lhs_start > 0, lhs_start, 0)
     lhs_stop = np.where(lhs_stop > lhs_shape_dil, lhs_shape_dil, lhs_stop)
-    lhs_slice = ((slc[0], slice(None)) +
+    lhs_slice = ((out_slc[0], slice(None)) +
                  tuple(slice(int(s), int(e)) for s, e in
                        zip(lhs_start, lhs_stop)))
     new = lax.conv_general_dilated(
-        lhs[lhs_slice], rhs,
+        lhs[unpermute(lhs_slice, lhs_spec)], rhs,
         window_strides=window_strides, padding=sub_padding,
         lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
         dimension_numbers=dimension_numbers)
@@ -320,15 +323,15 @@ def conv_general_dilated_update(old_out, lhs, rhs, window_strides, padding,
         dimension_numbers=dimension_numbers,
         lhs_shape=lhs_shape, rhs_shape=rhs_shape)
 
-    if dimension_numbers is not None:
-        assert dimension_numbers.lhs_spec == tuple(range(np.ndim(lhs)))
-        assert dimension_numbers.rhs_spec == tuple(range(np.ndim(rhs)))
-        assert dimension_numbers.out_spec == tuple(range(np.ndim(outval)))
-
     outmask = conv_general_dilated_outmask(
         lhs_mask, rhs_mask, window_strides=window_strides, padding=padding,
         lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
         dimension_numbers=dimension_numbers)
+
+    # if dimension_numbers is not None:
+    #     assert dimension_numbers.lhs_spec == tuple(range(np.ndim(lhs)))
+    #     assert dimension_numbers.rhs_spec == tuple(range(np.ndim(rhs)))
+    #     assert dimension_numbers.out_spec == tuple(range(np.ndim(outval)))
 
     new_mask = outmask & ~old_outmask
     for slice in util.mask_to_slices(new_mask):
