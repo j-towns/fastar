@@ -290,8 +290,8 @@ def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
 def conv_general_dilated_update_slice_op(
         slc, out, lhs, rhs, window_strides, padding,
         lhs_dilation=None, rhs_dilation=None, dimension_numbers=None):
-    permute = lambda it, perm: [it[i] for i in perm]
-    unpermute = lambda it, perm: [it[i] for i in onp.argsort(perm)]
+    permute = lambda it, perm: tuple(it[i] for i in perm)
+    unpermute = lambda it, perm: tuple(it[i] for i in onp.argsort(perm))
     lhs_spec, rhs_spec, out_spec = dimension_numbers
     lhs_shape = permute(np.shape(lhs), lhs_spec)
     rhs_shape = permute(np.shape(rhs), rhs_spec)
