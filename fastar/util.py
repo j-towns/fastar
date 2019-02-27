@@ -95,6 +95,9 @@ def to_numpy(x):
     if isinstance(x, float):
         return np.float64(x)
 
+    if isinstance(x, bool):
+        return np.bool_(x)
+
     if isinstance(x, int):
         return np.int64(x)
 

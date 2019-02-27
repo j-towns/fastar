@@ -59,6 +59,9 @@ def test_dot_matrix_matrix(): check(lax.dot, (3, 2), (2, 4))
 def test_dot_general_tensor_matrix(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,), (1,)), ((0,), (0,)))), (1, 2, 3), (1, 3))
 def test_dot_general_tensor_tensor(): check(lambda x, y: lax.dot_general(x, y, dimension_numbers=(((2,), (1,)), ((0,), (0,)))), (1, 2, 3), (1, 3, 4), rtol=1e-4)
 
+def test_select(): check_custom_input(lax.select, lambda rng: (rng.rand(3, 2) > 0.5, rng.randn(3, 2), rng.randn(3, 2)))
+def test_select_scalar_pred(): check_custom_input(lax.select, lambda rng: (rng.rand() > 0.5, rng.randn(3, 2), rng.randn(3, 2)))
+
 
 def test_transpose(): check(lambda x: lax.transpose(x, permutation=(1, 2, 0)), (1, 2, 3))
 def test_reverse(): check(lambda x: lax.rev(x, dimensions=(1, 2)), (1, 2, 3))

@@ -70,6 +70,18 @@ for op in unops:
     fa.update_rules[op] = unop_update(op)
 
 
+def select_update(old_out, pred, on_true, on_false):
+    pred, pred_msk = pred
+    on_true, on_true_msk = on_true
+    on_false, on_false_msk = on_false
+    return sliceableop_update(
+        lax.select_p, old_out, pred_msk & on_true_msk & on_false_msk,
+        ((lambda s: ((), s, s)) if onp.ndim(pred_msk) == 0
+         else lambda s: 3 * (s,)),
+        pred, on_true, on_false)
+fa.update_rules[lax.select_p] = select_update
+
+
 @curry
 def binop_update(func, old_out, a, b):
     a, a_mask = a
