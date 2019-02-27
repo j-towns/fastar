@@ -26,14 +26,19 @@ def test_add_scalar_int(): check_custom_input(lax.add, lambda _: (4, 7))
 def test_add_vector(): check(lax.add, (1,), (2,))
 def test_add_matrix(): check(lax.add, (1, 2), (3, 1))
 
-
-def test_sub(): check(lax.sub, (1, 2), (3, 1))
-def test_mul(): check(lax.mul, (1, 2), (3, 1))
+def test_add(): check(lax.add, (1, 2), (3, 1))
 def test_div(): check(lax.div, (1, 2), (3, 1))
-def test_rem(): check(lax.rem, (1, 2), (3, 1))
+def test_eq():  check(lax.eq,  (1, 2), (3, 1))
+def test_ge():  check(lax.ge,  (1, 2), (3, 1))
+def test_gt():  check(lax.gt,  (1, 2), (3, 1))
+def test_le():  check(lax.le,  (1, 2), (3, 1))
+def test_lt():  check(lax.lt,  (1, 2), (3, 1))
 def test_max(): check(lax.max, (1, 2), (3, 1))
 def test_min(): check(lax.min, (1, 2), (3, 1))
-
+def test_mul(): check(lax.mul, (1, 2), (3, 1))
+def test_ne():  check(lax.ne,  (1, 2), (3, 1))
+def test_rem(): check(lax.rem, (1, 2), (3, 1))
+def test_sub(): check(lax.sub, (1, 2), (3, 1))
 
 def test_reduce_sum_vector(): check(lambda x: lax._reduce_sum(x, axes=(0,)), (4,))
 def test_reduce_sum_matrix_axis0(): check(lambda x: lax._reduce_sum(x, axes=(0,)), (2, 4))
@@ -82,7 +87,7 @@ def test_pad_matrix_negatively_interior_on_different_axes(): check(lambda x, pad
         (("NCHW", "HWIO", "NHWC"), ([0, 1, 2, 3], [2, 3, 1, 0]))
     ])
 def test_convolution(filter_shape, strides, padding, dimension_numbers):
-    lhs_shape = (1, 2, 5, 5)
+    lhs_shape = (1, 2, 4, 4)
     rhs_shape = (3, 2) + filter_shape
     dimension_numbers, (lhs_perm, rhs_perm) = dimension_numbers
     check(
