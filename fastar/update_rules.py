@@ -29,7 +29,9 @@ def _add_at(arr, idxs, vals):
 
     ans, take_vjp = vjp(lambda arr: take(arr, idxs), arr)
     assert ans.shape == vals.shape
-    return arr + take_vjp(vals)[0]
+    return (arr != take_vjp(vals)[0]
+            if arr.dtype == 'bool'
+            else arr + take_vjp(vals)[0])
 
 
 def sliceableop_update(func, old_out, output_mask,
@@ -83,8 +85,21 @@ def binop_update(func, old_out, a, b):
         a, b)
 
 
-binops = [lax.add_p, lax.sub_p, lax.mul_p, lax.div_p,
-          lax.rem_p, lax.max_p, lax.min_p]
+binops = [
+    lax.add_p,
+    lax.div_p,
+    lax.eq_p,
+    lax.ge_p,
+    lax.gt_p,
+    lax.le_p,
+    lax.lt_p,
+    lax.max_p,
+    lax.min_p,
+    lax.mul_p,
+    lax.ne_p,
+    lax.rem_p,
+    lax.sub_p,
+]
 for op in binops:
     fa.update_rules[op] = binop_update(op)
 
