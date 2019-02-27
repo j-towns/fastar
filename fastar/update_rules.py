@@ -166,7 +166,7 @@ def rearrange_update(func, old_out, *args, **params):
     args, args_mask = zip(*args)
 
     return fa.Parray((func.bind(*args, **params),
-                      func.bind(*args_mask, **params)))
+                      onp.array(func.bind(*args_mask, **params))))
 
 
 rearrange_ops = [lax.reshape_p, lax.transpose_p, lax.rev_p, lax.concatenate_p]
