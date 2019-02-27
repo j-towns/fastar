@@ -97,4 +97,4 @@ def test_convolution(filter_shape, strides, padding, dimension_numbers):
         lambda lhs: lax.conv_general_dilated(
             lhs, np.random.RandomState(0).randn(*np.take(rhs_shape, rhs_perm)),
             strides, padding, dimension_numbers=dimension_numbers),
-        np.take(lhs_shape, lhs_perm))
+        np.take(lhs_shape, lhs_perm), rtol=1e-4, atol=1e-6)
