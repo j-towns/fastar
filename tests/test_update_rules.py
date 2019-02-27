@@ -82,7 +82,7 @@ def test_pad_matrix_negatively_interior_on_different_axes(): check(lambda x, pad
         (("NCHW", "HWIO", "NHWC"), ([0, 1, 2, 3], [2, 3, 1, 0]))
     ])
 def test_convolution(filter_shape, strides, padding, dimension_numbers):
-    lhs_shape = (1, 2, 5, 5)
+    lhs_shape = (1, 2, 4, 4)
     rhs_shape = (3, 2) + filter_shape
     dimension_numbers, (lhs_perm, rhs_perm) = dimension_numbers
     check(
