@@ -36,7 +36,7 @@ def check_ans(ans_old, ans):
     assert is_subset(np.bool_(ans), mask)
     assert np.all(np.where(mask_old, ans == ans_old, True))
 
-def check_custom_input(fun, inputs_from_rng, rtol=1e-5, runs=5):
+def check_custom_input(fun, inputs_from_rng, rtol=1e-4, atol=1e-8, runs=5):
     rng = np.random.RandomState(0)
     for _ in range(runs):
         args = inputs_from_rng(rng)
@@ -51,7 +51,14 @@ def check_custom_input(fun, inputs_from_rng, rtol=1e-5, runs=5):
             ans_old = ans_
         ans_, mask = ans_
         assert np.all(mask)
-        assert np.allclose(ans, ans_, rtol=rtol)
+        try:
+            assert np.allclose(ans, ans_, rtol=rtol, atol=atol)
+        except AssertionError:
+            np.set_printoptions(threshold=np.nan)
+            raise AssertionError(
+                'Result incorrect: ' + str(ans) + 'vs. \n' + str(ans_) +
+                '\n: Differs at: ' + str(np.isclose(ans, ans_, rtol=rtol, atol=atol)) +
+                '\n Difference: ' + str(ans - ans_))
         assert ans.dtype == ans_.dtype
 
 def check(fun, *shapes, **kwargs):
