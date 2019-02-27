@@ -36,7 +36,7 @@ def check_ans(ans_old, ans):
     assert is_subset(np.bool_(ans), mask)
     assert np.all(np.where(mask_old, ans == ans_old, True))
 
-def check_custom_input(fun, inputs_from_rng, rtol=1e-4, atol=1e-8, runs=5):
+def check_custom_input(fun, inputs_from_rng, rtol=1e-5, atol=1e-8, runs=5):
     rng = np.random.RandomState(0)
     for _ in range(runs):
         args = inputs_from_rng(rng)
