@@ -84,17 +84,20 @@ def test_pad_matrix_negatively_interior_on_different_axes(): check(lambda x, pad
 @pytest.mark.parametrize('filter_shape', [(3, 2), (1, 1)])
 @pytest.mark.parametrize('strides', [[1, 1], [1, 2], [2, 1]])
 @pytest.mark.parametrize('padding', ['SAME', 'VALID'])
+@pytest.mark.parametrize('lhs_dilation', [[1, 1], [1, 2], [2, 1]])
 @pytest.mark.parametrize('dimension_numbers', [
         (("NCHW", "OIHW", "NCHW"), ([0, 1, 2, 3], [0, 1, 2, 3])),
         (("NHWC", "HWIO", "NHWC"), ([0, 2, 3, 1], [2, 3, 1, 0])),
         (("NCHW", "HWIO", "NHWC"), ([0, 1, 2, 3], [2, 3, 1, 0]))
     ])
-def test_convolution(filter_shape, strides, padding, dimension_numbers):
+def test_convolution(
+        filter_shape, strides, padding, lhs_dilation, dimension_numbers):
     lhs_shape = (1, 2, 4, 4)
     rhs_shape = (3, 2) + filter_shape
     dimension_numbers, (lhs_perm, rhs_perm) = dimension_numbers
     check(
         lambda lhs: lax.conv_general_dilated(
             lhs, np.random.RandomState(0).randn(*np.take(rhs_shape, rhs_perm)),
-            strides, padding, dimension_numbers=dimension_numbers),
+            strides, padding, lhs_dilation=lhs_dilation,
+            dimension_numbers=dimension_numbers),
         np.take(lhs_shape, lhs_perm), rtol=1e-4, atol=1e-6)

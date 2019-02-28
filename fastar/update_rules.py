@@ -302,35 +302,40 @@ def conv_general_dilated_update_slice_op(
     out_start = onp.array([s.start for s in out_slc[2:]])
     out_stop =  onp.array([s.stop  for s in out_slc[2:]])
     out_start = out_start * np.array(window_strides)
-    out_stop = out_stop * np.array(window_strides)
+    out_stop = (out_stop - 1) * np.array(window_strides) + 1
     lhs_start_dilated = onp.subtract(out_start, pad_low)
     lhs_stop_dilated = onp.subtract(out_stop + window_shape - 1, pad_low)
-    lhs_start = np.where(
+    lhs_start = onp.where(
         lhs_start_dilated > 0,
         np.where(lhs_start_dilated < lhs_shape_dil,
-                 lhs_start_dilated // lhs_dilation,
+                 (lhs_start_dilated - 1) // lhs_dilation + 1,
                  lhs_start_dilated - (lhs_shape_dil - lhs_shape[2:])),
-        lhs_start_dilated // lhs_dilation)
-    lhs_stop = np.where(
+        lhs_start_dilated)
+    lhs_stop = onp.where(
         lhs_stop_dilated > 0,
         np.where(lhs_stop_dilated < lhs_shape_dil,
-                 lhs_stop_dilated // lhs_dilation,
+                 (lhs_stop_dilated - 1) // lhs_dilation + 1,
                  lhs_stop_dilated - (lhs_shape_dil - lhs_shape[2:])),
-        lhs_stop_dilated // lhs_dilation)
-    sub_pad_low = np.where(lhs_start < 0, -lhs_start, 0)
-    sub_pad_high = np.where(lhs_stop > lhs_shape_dil, lhs_stop - lhs_shape_dil,
-                            0)
-    sub_padding = zip(sub_pad_low, sub_pad_high)
-    lhs_start = np.where(lhs_start > 0, lhs_start, 0)
-    lhs_stop = np.where(lhs_stop > lhs_shape_dil, lhs_shape_dil, lhs_stop)
-    lhs_slice = ((out_slc[0], slice(None)) +
-                 tuple(slice(int(s), int(e)) for s, e in
-                       zip(lhs_start, lhs_stop)))
-    new = lax.conv_general_dilated(
-        lhs[unpermute(lhs_slice, lhs_spec)], rhs,
-        window_strides=window_strides, padding=sub_padding,
-        lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
-        dimension_numbers=dimension_numbers)
+        lhs_stop_dilated)
+    lhs_start = onp.where(onp.greater(lhs_start, 0), lhs_start, 0)
+    lhs_stop = onp.where(onp.greater(lhs_stop, lhs_shape[2:]),
+                        lhs_shape[2:], lhs_stop)
+    if onp.any(lhs_start == lhs_stop):
+        new = np.zeros_like(out[slc])
+    else:
+        sub_pad_low = onp.maximum(
+            onp.multiply(lhs_start, lhs_dilation) - lhs_start_dilated, 0)
+        sub_pad_high = onp.maximum(
+            lhs_stop_dilated - onp.multiply((lhs_stop - 1), lhs_dilation) - 1, 0)
+        sub_padding = zip(sub_pad_low, sub_pad_high)
+        lhs_slice = ((out_slc[0], slice(None)) +
+                     tuple(slice(int(s), int(e)) for s, e in
+                           zip(lhs_start, lhs_stop)))
+        new = lax.conv_general_dilated(
+            lhs[unpermute(lhs_slice, lhs_spec)], rhs,
+            window_strides=window_strides, padding=sub_padding,
+            lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
+            dimension_numbers=dimension_numbers)
     return _add_at(out, slc, new)
 
 
