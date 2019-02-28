@@ -290,49 +290,37 @@ def conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
 def conv_general_dilated_update_slice_op(
         slc, out, lhs, rhs, window_strides, padding,
         lhs_dilation=None, rhs_dilation=None, dimension_numbers=None):
-    permute = lambda it, perm: tuple(it[i] for i in perm)
-    unpermute = lambda it, perm: tuple(it[i] for i in onp.argsort(perm))
     lhs_spec, rhs_spec, out_spec = dimension_numbers
-    lhs_shape = permute(np.shape(lhs), lhs_spec)
-    rhs_shape = permute(np.shape(rhs), rhs_spec)
-    out_slc = permute(slc, out_spec)
+    lhs_shape = onp.take(np.shape(lhs), lhs_spec)
+    rhs_shape = onp.take(np.shape(rhs), rhs_spec)
+    out_slc = [slc[i] for i in out_spec]
     pad_low, pad_high = unzip2(padding)
     window_shape = lax._dilate_shape(rhs_shape, rhs_dilation)[2:]
     lhs_shape_dil = lax._dilate_shape(lhs_shape, lhs_dilation)[2:]
-    out_start = onp.array([s.start for s in out_slc[2:]])
-    out_stop =  onp.array([s.stop  for s in out_slc[2:]])
-    out_start = out_start * np.array(window_strides)
-    out_stop = (out_stop - 1) * np.array(window_strides) + 1
-    lhs_start_dilated = onp.subtract(out_start, pad_low)
-    lhs_stop_dilated = onp.subtract(out_stop + window_shape - 1, pad_low)
-    lhs_start = onp.where(
-        lhs_start_dilated > 0,
-        np.where(lhs_start_dilated < lhs_shape_dil,
-                 (lhs_start_dilated - 1) // lhs_dilation + 1,
-                 lhs_start_dilated - (lhs_shape_dil - lhs_shape[2:])),
-        lhs_start_dilated)
-    lhs_stop = onp.where(
-        lhs_stop_dilated > 0,
-        np.where(lhs_stop_dilated < lhs_shape_dil,
-                 (lhs_stop_dilated - 1) // lhs_dilation + 1,
-                 lhs_stop_dilated - (lhs_shape_dil - lhs_shape[2:])),
-        lhs_stop_dilated)
-    lhs_start = onp.where(onp.greater(lhs_start, 0), lhs_start, 0)
-    lhs_stop = onp.where(onp.greater(lhs_stop, lhs_shape[2:]),
-                        lhs_shape[2:], lhs_stop)
+    out_start, out_stop = onp.array(unzip2((s.start, s.stop) for s in out_slc))
+    out_start_dilated = out_start[2:] * onp.array(window_strides)
+    out_stop_dilated = (out_stop[2:] - 1) * onp.array(window_strides) + 1
+    lhs_start_dilated = onp.subtract(out_start_dilated, pad_low)
+    lhs_stop_dilated = onp.subtract(out_stop_dilated + window_shape - 1,
+                                    pad_low)
+    lhs_start = onp.clip((lhs_start_dilated - 1) // lhs_dilation + 1, 0,
+                         lhs_shape[2:])
+    lhs_stop = onp.clip((lhs_stop_dilated - 1) // lhs_dilation + 1, 0,
+                        lhs_shape[2:])
     if onp.any(lhs_start == lhs_stop):
-        new = np.zeros_like(out[slc])
+        new = np.zeros(onp.take(out_stop - out_start, onp.argsort(out_spec)))
     else:
         sub_pad_low = onp.maximum(
             onp.multiply(lhs_start, lhs_dilation) - lhs_start_dilated, 0)
         sub_pad_high = onp.maximum(
-            lhs_stop_dilated - onp.multiply((lhs_stop - 1), lhs_dilation) - 1, 0)
+            lhs_stop_dilated - onp.multiply((lhs_stop - 1), lhs_dilation) - 1,
+            0)
         sub_padding = zip(sub_pad_low, sub_pad_high)
         lhs_slice = ((out_slc[0], slice(None)) +
                      tuple(slice(int(s), int(e)) for s, e in
                            zip(lhs_start, lhs_stop)))
         new = lax.conv_general_dilated(
-            lhs[unpermute(lhs_slice, lhs_spec)], rhs,
+            lhs[tuple(onp.take(lhs_slice, onp.argsort(lhs_spec)))], rhs,
             window_strides=window_strides, padding=sub_padding,
             lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
             dimension_numbers=dimension_numbers)
