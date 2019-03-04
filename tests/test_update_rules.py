@@ -19,12 +19,13 @@ def test_tanh(): check(lax.tanh, (1, 2))
 
 
 # Binops
-def test_add_scalar(): check(lax.add, (), ())
-def test_add_scalar_as_numpy(): check_custom_input(lax.add, lambda rng: (np.float64(rng.randn()), np.float64(rng.randn())))
-def test_add_scalar_as_array(): check_custom_input(lax.add, lambda rng: (np.array(rng.randn()), np.array(rng.randn())))
-def test_add_scalar_int(): check_custom_input(lax.add, lambda _: (4, 7))
-def test_add_vector(): check(lax.add, (1,), (2,))
-def test_add_matrix(): check(lax.add, (1, 2), (3, 1))
+def test_add_scalar_scalar(): check(lax.add, (), ())
+def test_add_scalar_vector(): check(lax.add, (), (2,))
+def test_add_scalar_scalar_as_numpy(): check_custom_input(lax.add, lambda rng: (np.float64(rng.randn()), np.float64(rng.randn())))
+def test_add_scalar_scalar_as_array(): check_custom_input(lax.add, lambda rng: (np.array(rng.randn()), np.array(rng.randn())))
+def test_add_scalar_scalar_int(): check_custom_input(lax.add, lambda _: (4, 7))
+def test_add_vector_vector(): check(lax.add, (1,), (2,))
+def test_add_matrix_matrix(): check(lax.add, (1, 2), (3, 1))
 
 def test_add(): check(lax.add, (1, 2), (3, 1))
 def test_div(): check(lax.div, (1, 2), (3, 1))

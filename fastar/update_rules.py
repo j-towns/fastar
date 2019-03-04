@@ -89,7 +89,7 @@ def binop_update(func, old_out, a, b):
 
     def broadcast_slice(s, shape):
         return tuple(s if dim_sz > 1 else slice(None)
-                     for s, dim_sz in zip(s[-len(shape):], shape))
+                     for s, dim_sz in zip(s[len(s) - len(shape):], shape))
 
     return sliceableop_update(
         func, old_out, a_mask & b_mask,
@@ -296,8 +296,7 @@ def conv_general_dilated_update_slice_op(
     out_slc = [slc[i] for i in out_spec]
     pad_low, pad_high = unzip2(padding)
     window_shape = lax._dilate_shape(rhs_shape, rhs_dilation)[2:]
-    lhs_shape_dil = lax._dilate_shape(lhs_shape, lhs_dilation)[2:]
-    out_start, out_stop = onp.array(unzip2((s.start, s.stop) for s in out_slc))
+    out_start, out_stop = onp.transpose([[s.start, s.stop] for s in out_slc])
     out_start_dilated = out_start[2:] * onp.array(window_strides)
     out_stop_dilated = (out_stop[2:] - 1) * onp.array(window_strides) + 1
     lhs_start_dilated = onp.subtract(out_start_dilated, pad_low)
