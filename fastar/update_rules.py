@@ -210,7 +210,12 @@ def rearrange_update(func, old_out, *args, **params):
                       onp.array(func.bind(*args_mask, **params))))
 
 
-rearrange_ops = [lax.reshape_p, lax.transpose_p, lax.rev_p, lax.concatenate_p]
+rearrange_ops = [
+    lax.reshape_p,
+    lax.transpose_p,
+    lax.rev_p,
+    lax.concatenate_p,
+    lax.slice_p]
 
 for op in rearrange_ops:
     fa.update_rules[op] = rearrange_update(op)

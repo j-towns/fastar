@@ -72,6 +72,7 @@ def test_reverse(): check(lambda x: lax.rev(x, dimensions=(1, 2)), (1, 2, 3))
 def test_reshape(): check(lambda x: lax.reshape(x, new_sizes=(3, 2), dimensions=(1, 0, 2)), (1, 2, 3))
 def test_concatenate_2(): check(lambda x, y: lax.concatenate((x, y), dimension=2), (1, 2, 1), (1, 2, 3))
 def test_concatenate_3(): check(lambda x, y, z: lax.concatenate((x, y, z), dimension=1), (2, 1), (2, 3), (2, 2))
+def test_slice(): check(lambda x: lax.slice(x, start_indices=(1, 1, 0), limit_indices=(2, 2, 1), strides=(2, 1, 1)), (7, 2, 1))
 
 def test_pad_vector(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1, 2, 0),)), (2,), ())
 def test_pad_matrix(): check(lambda x, padding_value: lax.pad(x, padding_value, padding_config=((1, 2, 0), (3, 4, 0))), (1, 2), ())
