@@ -1,5 +1,6 @@
 import jax.lax as lax
 import jax.numpy as np
+import jax.scipy.special as special
 import numpy as onp
 from jax import vjp
 from jax.abstract_arrays import make_shaped_array
@@ -64,8 +65,21 @@ def unop_update(func, old_out, a):
     return sliceableop_update(func, old_out, a_mask, lambda s: (s,), a)
 
 
-unops = [lax.abs_p, lax.ceil_p, lax.cos_p, lax.sin_p, lax.exp_p,
-         lax.floor_p, lax.log_p, lax.neg_p, lax.sign_p, lax.tanh_p]
+unops = [
+    lax.abs_p,
+    lax.ceil_p,
+    lax.cos_p,
+    lax.exp_p,
+    lax.floor_p,
+    lax.log_p,
+    lax.neg_p,
+    lax.sign_p,
+    lax.sin_p,
+    lax.tanh_p,
+    special.expit.primitive,
+    special.logit.primitive,
+]
+
 for op in unops:
     fa.update_rules[op] = unop_update(op)
 

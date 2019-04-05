@@ -1,5 +1,6 @@
 import jax.lax as lax
 import numpy as np
+import jax.scipy.special as special
 import pytest
 
 from fastar.test_util import check, check_custom_input
@@ -16,6 +17,8 @@ def test_log(): check_custom_input(lax.log, lambda rng: np.abs(rng.randn(1, 2)))
 def test_neg(): check(lax.neg, (1, 2))
 def test_sign(): check(lax.sign, (1, 2))
 def test_tanh(): check(lax.tanh, (1, 2))
+def test_expit(): check(special.expit, (1, 2))
+def test_logit(): check_custom_input(special.logit, lambda rng: rng.rand(1, 2))
 
 
 # Binops
