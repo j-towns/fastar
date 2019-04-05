@@ -60,9 +60,9 @@ def sliceableop_update(func, old_out, output_mask,
 
 
 @curry
-def unop_update(func, old_out, a):
+def unop_update(func, old_out, a, **params):
     a, a_mask = a
-    return sliceableop_update(func, old_out, a_mask, lambda s: (s,), a)
+    return sliceableop_update(func, old_out, a_mask, lambda s: (s,), a, **params)
 
 
 unops = [
@@ -76,6 +76,7 @@ unops = [
     lax.sign_p,
     lax.sin_p,
     lax.tanh_p,
+    lax.convert_element_type_p,
     special.expit.primitive,
     special.logit.primitive,
 ]

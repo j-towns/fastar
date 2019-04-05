@@ -17,6 +17,8 @@ def test_log(): check_custom_input(lax.log, lambda rng: np.abs(rng.randn(1, 2)))
 def test_neg(): check(lax.neg, (1, 2))
 def test_sign(): check(lax.sign, (1, 2))
 def test_tanh(): check(lax.tanh, (1, 2))
+@pytest.mark.parametrize('new_dtype', [np.int, np.bool, np.byte])
+def test_convert(new_dtype): check(lambda x: lax.convert_element_type(x, new_dtype=new_dtype), (1, 2))
 def test_expit(): check(special.expit, (1, 2))
 def test_logit(): check_custom_input(special.logit, lambda rng: rng.rand(1, 2))
 
