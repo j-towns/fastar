@@ -104,6 +104,7 @@ for op in nops:
 @curry
 def cheap_op_update(op, old_out, *args, **params):
     args, args_mask = zip(*args)
+    # TODO: use onp equivalents to process the masks
     return fa.Parray((op.bind(*args, **params),
                       onp.bool_(op.bind(*args_mask, **params))))
 
