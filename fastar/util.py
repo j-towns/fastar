@@ -25,9 +25,9 @@ def false_mask(val):
 def _to_tree(idxs):
     tree = {}
     for idx in idxs:
-        sub_tree = tree
+        branch = tree
         for i in idx:
-            sub_tree = sub_tree.setdefault(i, {})
+            branch = branch.setdefault(i, {})
     return tree
 
 _srange = lambda *args: set(range(*args))
