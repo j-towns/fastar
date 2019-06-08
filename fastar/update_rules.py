@@ -1,3 +1,5 @@
+from functools import reduce
+from operator import and_
 import jax.lax as lax
 from jax.ops import index_update
 import jax.numpy as np
@@ -24,6 +26,10 @@ def _init_output(func, *args, **params):
     outmask = onp.zeros(abstract_out.shape, bool)
     return (outval, outmask),
 
+def _unbroadcast_slice(s, shape):
+    return tuple(s if dim_sz > 1 else slice(None)
+                 for s, dim_sz in zip(s[len(s) - len(shape):], shape))
+
 
 def sliceableop_update(func, old_out, output_mask,
                        input_slices_from_output_slice, *args, **params):
@@ -43,103 +49,101 @@ def sliceableop_update(func, old_out, output_mask,
 
         input_slices = input_slices_from_output_slice(output_slice)
         sliced_inputs = tuple(arg[s] for arg, s in zip(args, input_slices))
-        if func is lax.reduce_sum_p:
-            params['input_shape'] = sliced_inputs[0].shape
         sliced_output = func.bind(*sliced_inputs, **params)
         outval = index_update(outval, output_slice, sliced_output)
 
     return fa.Parray((outval, output_mask))
 
-
+# n-ary elementwise operators with broadcasting
 @curry
-def unop_update(func, old_out, a, **params):
-    a, a_mask = a
-    return sliceableop_update(func, old_out, a_mask, lambda s: (s,), a, **params)
+def nop_update(op, out, *args):
+    args, arg_masks = zip(*args)
+    (out, out_mask), = _init_output(op, *args) if out is None else out
+    new_out_mask = reduce(and_, arg_masks)
+    slices = util.mask_to_slices(new_out_mask &~ out_mask)
+    for s in slices:
+        part_args = [a[_unbroadcast_slice(s, np.shape(a))] for a in args]
+        out = index_update(out, s, op.bind(*part_args))
+    return fa.Parray((out, new_out_mask))
 
 
-unops = [
+nops = [
     lax.abs_p,
+    lax.add_p,
     lax.ceil_p,
     lax.cos_p,
-    lax.exp_p,
-    lax.floor_p,
-    lax.log_p,
-    lax.neg_p,
-    lax.sign_p,
-    lax.sin_p,
-    lax.tanh_p,
-    lax.convert_element_type_p,
-    special.expit.primitive,
-    special.logit.primitive,
-]
-
-for op in unops:
-    fa.update_rules[op] = unop_update(op)
-
-
-def select_update(old_out, pred, on_true, on_false):
-    pred, pred_msk = pred
-    on_true, on_true_msk = on_true
-    on_false, on_false_msk = on_false
-    return sliceableop_update(
-        lax.select_p, old_out, pred_msk & on_true_msk & on_false_msk,
-        ((lambda s: ((), s, s)) if onp.ndim(pred_msk) == 0
-         else lambda s: 3 * (s,)),
-        pred, on_true, on_false)
-fa.update_rules[lax.select_p] = select_update
-
-
-@curry
-def binop_update(func, old_out, a, b):
-    a, a_mask = a
-    b, b_mask = b
-
-    def broadcast_slice(s, shape):
-        return tuple(s if dim_sz > 1 else slice(None)
-                     for s, dim_sz in zip(s[len(s) - len(shape):], shape))
-
-    return sliceableop_update(
-        func, old_out, a_mask & b_mask,
-        lambda s: (broadcast_slice(s, a.shape), broadcast_slice(s, b.shape)),
-        a, b)
-
-
-binops = [
-    lax.add_p,
     lax.div_p,
     lax.eq_p,
+    lax.exp_p,
+    lax.floor_p,
     lax.ge_p,
     lax.gt_p,
     lax.le_p,
+    lax.log_p,
     lax.lt_p,
     lax.max_p,
     lax.min_p,
     lax.mul_p,
     lax.ne_p,
+    lax.neg_p,
     lax.rem_p,
+    lax.select_p,
+    lax.sign_p,
+    lax.sin_p,
     lax.sub_p,
+    lax.tanh_p,
+    special.expit.primitive,
+    special.logit.primitive,
 ]
-for op in binops:
-    fa.update_rules[op] = binop_update(op)
+
+for op in nops:
+    fa.update_rules[op] = nop_update(op)
 
 
+# Cheap ops, these are assumed to require little or no computation
 @curry
-def reduce_update(func, old_out, a, axes, **params):
-    a, a_mask = a
+def cheap_op_update(op, old_out, *args, **params):
+    args, args_mask = zip(*args)
+    return fa.Parray((op.bind(*args, **params),
+                      onp.bool_(op.bind(*args_mask, **params))))
 
-    def input_slices_from_output_slice(output_slice):
-        a_slice = list(output_slice)
+cheap_ops = [
+    lax.concatenate_p,
+    lax.convert_element_type_p,
+    lax.reshape_p,
+    lax.rev_p,
+    lax.slice_p,
+    lax.transpose_p,
+]
+
+for op in cheap_ops:
+    fa.update_rules[op] = cheap_op_update(op)
+
+
+# Reductions
+@curry
+def reduce_update(op, out, a, **params):
+    a, a_mask = a
+    (out, out_mask), = _init_output(op, a, **params) if out is None else out
+    axes = params['axes']
+    new_out_mask = onp.all(a_mask, axes)
+    slices = util.mask_to_slices(new_out_mask &~ out_mask)
+    for s in slices:
+        a_slice = list(s)
         for axis in axes:
             a_slice.insert(axis, slice(None))
-        return tuple(a_slice),
+        a_part = a[tuple(a_slice)]
+        if 'input_shape' in params:
+            params['input_shape'] = np.shape(a_part)
+        out = index_update(out, s, op.bind(a_part, **params))
+    return fa.Parray((out, new_out_mask))
 
-    return sliceableop_update(
-        func, old_out, onp.equal(onp.sum(a_mask.astype(int), axis=axes),
-                                 onp.prod([a_mask.shape[axis]
-                                           for axis in axes])),
-        input_slices_from_output_slice, a, axes=axes, **params)
+reduce_ops = [
+    lax.reduce_max_p,
+    lax.reduce_min_p,
+    lax.reduce_sum_p,
+]
 
-reduce_ops = [lax.reduce_sum_p, lax.reduce_min_p, lax.reduce_max_p]
 for op in reduce_ops:
     fa.update_rules[op] = reduce_update(op)
 
@@ -192,25 +196,6 @@ def dot_general_update(old_out, a, b, dimension_numbers):
 
 
 fa.update_rules[lax.dot_general_p] = dot_general_update
-
-
-@curry
-def rearrange_update(func, old_out, *args, **params):
-    args, args_mask = zip(*args)
-
-    return fa.Parray((func.bind(*args, **params),
-                      onp.array(func.bind(*args_mask, **params))))
-
-
-rearrange_ops = [
-    lax.reshape_p,
-    lax.transpose_p,
-    lax.rev_p,
-    lax.concatenate_p,
-    lax.slice_p]
-
-for op in rearrange_ops:
-    fa.update_rules[op] = rearrange_update(op)
 
 
 def pad_update(old_out, input, padding_value, padding_config):
