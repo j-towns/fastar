@@ -1,4 +1,5 @@
 import jax.lax as lax
+from jax.ops import index_update
 import jax.numpy as np
 import jax.scipy.special as special
 import numpy as onp
@@ -24,17 +25,6 @@ def _init_output(func, *args, **params):
     return (outval, outmask),
 
 
-def _add_at(arr, idxs, vals):
-    def take(arr, idxs):
-        return arr[idxs]
-
-    ans, take_vjp = vjp(lambda arr: take(arr, idxs), arr)
-    assert ans.shape == vals.shape
-    return (arr != take_vjp(vals)[0]
-            if arr.dtype == 'bool'
-            else arr + take_vjp(vals)[0])
-
-
 def sliceableop_update(func, old_out, output_mask,
                        input_slices_from_output_slice, *args, **params):
     """Update rule for operations where any slice of their (only) output can be
@@ -53,8 +43,10 @@ def sliceableop_update(func, old_out, output_mask,
 
         input_slices = input_slices_from_output_slice(output_slice)
         sliced_inputs = tuple(arg[s] for arg, s in zip(args, input_slices))
+        if func is lax.reduce_sum_p:
+            params['input_shape'] = sliced_inputs[0].shape
         sliced_output = func.bind(*sliced_inputs, **params)
-        outval = _add_at(outval, output_slice, sliced_output)
+        outval = index_update(outval, output_slice, sliced_output)
 
     return fa.Parray((outval, output_mask))
 
@@ -146,7 +138,6 @@ def reduce_update(func, old_out, a, axes, **params):
                                  onp.prod([a_mask.shape[axis]
                                            for axis in axes])),
         input_slices_from_output_slice, a, axes=axes, **params)
-
 
 reduce_ops = [lax.reduce_sum_p, lax.reduce_min_p, lax.reduce_max_p]
 for op in reduce_ops:
@@ -269,7 +260,7 @@ def pad_update(old_out, input, padding_value, padding_config):
     output_mask[unpad_slice] = cropped_input_mask
     if new_padding_value_mask:
         for s in pad_slices():
-            outval = _add_at(outval, s, np.broadcast_to(padding_value,
+            outval = index_update(outval, s, np.broadcast_to(padding_value,
                                                         output_mask[s].shape))
             output_mask[s] = True
 
@@ -290,7 +281,7 @@ def pad_update(old_out, input, padding_value, padding_config):
             zip(cropped_input_slice, padding_config))
 
         assert np.all(outval[output_slice] == init_value)
-        outval = _add_at(outval, output_slice, input[input_slice])
+        outval = index_update(outval, output_slice, input[input_slice])
 
     return fa.Parray((outval, output_mask))
 
@@ -315,7 +306,7 @@ def conv_general_dilated_update_slice_op(
     rhs_shape = onp.take(np.shape(rhs), rhs_spec)
     out_slc = [slc[i] for i in out_spec]
     pad_low, pad_high = unzip2(padding)
-    window_shape = lax._dilate_shape(rhs_shape, rhs_dilation)[2:]
+    window_shape = lax.lax._dilate_shape(rhs_shape, rhs_dilation)[2:]
     out_start, out_stop = onp.transpose([[s.start, s.stop] for s in out_slc])
     out_start_dilated = out_start[2:] * onp.array(window_strides)
     out_stop_dilated = (out_stop[2:] - 1) * onp.array(window_strides) + 1
@@ -343,7 +334,7 @@ def conv_general_dilated_update_slice_op(
             window_strides=window_strides, padding=sub_padding,
             lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
             dimension_numbers=dimension_numbers)
-    return _add_at(out, slc, new)
+    return index_update(out, slc, new)
 
 
 def conv_general_dilated_update(old_out, lhs, rhs, window_strides, padding,

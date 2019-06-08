@@ -37,9 +37,10 @@ def _contains_rectangle(idx_tree, rectangle):
     Return True if rectangle is contained in idx_tree, else False.
     """
     (start, stop), rectangle = rectangle[0], rectangle[1:]
-    return all(n in idx_tree and not rectangle
-               or _contains_rectangle(idx_tree[n], rectangle)
-               for n in range(start, stop))
+    return all(
+        n in idx_tree
+        and (not rectangle or _contains_rectangle(idx_tree[n], rectangle))
+        for n in range(start, stop))
 
 def _remove_rectangle(idx_tree, rectangle):
     (start, stop), rectangle = rectangle[0], rectangle[1:]
