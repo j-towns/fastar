@@ -3,10 +3,12 @@ from operator import and_
 import jax.lax as lax
 from jax.ops import index_update
 import jax.numpy as np
+from jax.interpreters.batching import get_aval
 import jax.scipy.special as special
 import numpy as onp
 from jax import vjp
 from jax.abstract_arrays import make_shaped_array
+from jax.ad_util import zeros_like_aval
 from jax.util import curry, safe_zip, safe_map, unzip2
 
 import fastar.util as util
@@ -19,17 +21,13 @@ init_value = 0
 
 
 def _init_output(func, *args, **params):
-    # TODO: generalize to jaxvals
-    args = map(make_shaped_array, args)
+    args = map(get_aval, args)
     abstract_out = func.abstract_eval(*args, **params)
-    outval = lax.full(abstract_out.shape, init_value, abstract_out.dtype)
-    outmask = onp.zeros(abstract_out.shape, bool)
-    return (outval, outmask),
+    return (zeros_like_aval(abstract_out), util.false_mask(abstract_out)),
 
 def _unbroadcast_slice(s, shape):
     return tuple(s if dim_sz > 1 else slice(None)
                  for s, dim_sz in zip(s[len(s) - len(shape):], shape))
-
 
 def sliceableop_update(func, old_out, output_mask,
                        input_slices_from_output_slice, *args, **params):
@@ -58,7 +56,7 @@ def sliceableop_update(func, old_out, output_mask,
 @curry
 def nop_update(op, out, *args):
     args, arg_masks = zip(*args)
-    (out, out_mask), = _init_output(op, *args) if out is None else out
+    (out, out_mask), = out or _init_output(op, *args)
     new_out_mask = reduce(and_, arg_masks)
     slices = util.mask_to_slices(new_out_mask &~ out_mask)
     for s in slices:
@@ -92,12 +90,28 @@ nops = [
     lax.sin_p,
     lax.sub_p,
     lax.tanh_p,
-    special.expit.primitive,
-    special.logit.primitive,
 ]
 
 for op in nops:
     fa.update_rules[op] = nop_update(op)
+
+# Logit and expit use custom_transforms so their primitives have a different
+# form.
+@curry
+def logexpit_update(op, out, consts, jax_kwargs, x, **params):
+    consts, consts_mask = consts
+    jax_kwargs, jax_kwargs_mask = jax_kwargs
+    x, x_mask = x
+    (out, out_mask), = out or _init_output(op, consts, jax_kwargs, x, **params)
+    slices = util.mask_to_slices(x_mask &~ out_mask)
+    for s in slices:
+        part_x = x[_unbroadcast_slice(s, np.shape(x))]
+        out = index_update(out, s,
+                           op.bind(consts, jax_kwargs, part_x, **params))
+    return fa.Parray((out, x_mask))
+
+for op in [special.expit.prim, special.logit.prim]:
+    fa.update_rules[op] = logexpit_update(op)
 
 
 # Cheap ops, these are assumed to require little or no computation
