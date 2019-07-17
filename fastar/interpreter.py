@@ -18,10 +18,9 @@ def make_jaxpr(f):
         aval = xla.abstractify(x)
         return pe.PartialVal((aval, jc.unit))
 
-    fun = lu.wrap_init(f)
-
     @wraps(f)
     def jaxpr_maker(*args, **kwargs):
+        fun = lu.wrap_init(f)
         jax_args, in_trees = unzip2(map(pytree_to_jaxtupletree, args))
         jaxtree_fun, out_tree = pytree_fun_to_jaxtupletree_fun(fun, in_trees)
         pvals = map(pv_like, jax_args)
@@ -34,9 +33,12 @@ def make_jaxpr(f):
 # Populate the cache
 def firstpass(jaxpr, consts, *args):
     def read(v):
-        val = env[v]
-        assert isinstance(val, Parray)
-        return val
+        if type(v) is jc.Literal:
+            return Parray((v.val, util.true_mask(v.val)))
+        else:
+            val = env[v]
+            assert isinstance(val, Parray)
+            return val
 
     def write(v, val):
         assert isinstance(val, Parray)
@@ -51,7 +53,11 @@ def firstpass(jaxpr, consts, *args):
     map(write_const, jaxpr.constvars, consts)
     map(write, jaxpr.invars, args)
     for eqn in jaxpr.eqns:
-        in_vals = map(read, eqn.invars)
+        if not eqn.restructure:
+            in_vals = map(read, eqn.invars)
+        else:
+            in_vals = [pack(map(read, invars)) if type(invars) is tuple
+                       else read(invars) for invars in eqn.invars]
         if eqn.bound_subjaxprs:
             raise NotImplementedError
         ans = Parray(util.init_ans(eqn.primitive, *in_vals, **eqn.params))
@@ -63,14 +69,20 @@ def firstpass(jaxpr, consts, *args):
 
 def fastpass(jaxpr, consts, old_env, *args):
     def read(v):
-        val = env[v]
-        assert isinstance(val, Parray)
-        return val
+        if type(v) is jc.Literal:
+            return Parray((v.val, util.true_mask(v.val)))
+        else:
+            val = env[v]
+            assert isinstance(val, Parray)
+            return val
 
     def read_old(v):
-        val = old_env[v]
-        assert isinstance(val, Parray)
-        return val
+        if type(v) is jc.Literal:
+            return Parray((v.val, util.true_mask(v.val)))
+        else:
+            val = old_env[v]
+            assert isinstance(val, Parray)
+            return val
 
     def write(v, val):
         assert isinstance(val, Parray)
@@ -85,6 +97,11 @@ def fastpass(jaxpr, consts, old_env, *args):
     map(write_const, jaxpr.constvars, consts)
     map(write, jaxpr.invars, args)
     for eqn in jaxpr.eqns:
+        if not eqn.restructure:
+            in_vals = map(read, eqn.invars)
+        else:
+            in_vals = [pack(map(read, invars)) if type(invars) is tuple
+                       else read(invars) for invars in eqn.invars]
         old_outvals = map(read_old, eqn.outvars)
         old_ans = old_outvals if eqn.destructure else old_outvals[0]
         in_vals = map(read, eqn.invars)
