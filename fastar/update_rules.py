@@ -177,7 +177,7 @@ def dot_update(out, a, b, precision=None):
     elif a.ndim == 2 and b.ndim == 1:
         # Matrix-vector product
         if onp.all(b_mask):
-            new_outmask = onp.all(a_mask, axis=1)
+            new_outmask = onp.all(a_mask, 1)
             for s in util.mask_to_slices(new_outmask &~ outmask):
                 outval = index_update(
                     outval, s, lax.dot_p.bind(a[s], b, precision=precision))
@@ -187,7 +187,7 @@ def dot_update(out, a, b, precision=None):
     elif a.ndim == 1 and b.ndim == 2:
         # Vector-matrix product
         if onp.all(a_mask):
-            new_outmask = onp.all(b_mask, axis=0)
+            new_outmask = onp.all(b_mask, 0)
             for s in util.mask_to_slices(new_outmask &~ outmask):
                 outval = index_update(
                     outval, s, lax.dot_p.bind(a, b[:, s[0]],
@@ -197,8 +197,7 @@ def dot_update(out, a, b, precision=None):
             return fa.Parray((outval, outmask))
     else:
         # Matrix-matrix product
-        new_outmask = (onp.all(a_mask, axis=1, keepdims=True)
-                       & onp.all(b_mask, axis=0))
+        new_outmask = onp.all(a_mask, 1, keepdims=True) & onp.all(b_mask, 0)
         for s in util.mask_to_slices(new_outmask &~ outmask):
             outval = index_update(
                 outval, s, lax.dot_p.bind(
@@ -208,37 +207,53 @@ def dot_update(out, a, b, precision=None):
 fa.update_rules[lax.dot_p] = dot_update
 
 
-def dot_general_update(old_out, a, b, dimension_numbers):
+def dot_general_update(out, a, b, dimension_numbers, precision=None):
     a, a_mask = a
     b, b_mask = b
-    ((a_contracting_dims, b_contracting_dims),
-     (a_batch_dims, b_batch_dims)) = dimension_numbers
+    (outval, outmask), = (
+        out or _init_output(
+            lax.dot_general_p, a, b, dimension_numbers=dimension_numbers,
+            precision=precision))
 
-    contraction_ratio = np.prod([a.shape[d] for d in a_contracting_dims])
+    (a_cont_dims, b_cont_dims), (a_btch_dims, b_btch_dims) = dimension_numbers
 
-    o = lax.dot_general(a_mask.astype(np.float64), b_mask.astype(np.float64),
-                        dimension_numbers=dimension_numbers)
-    output_mask = onp.equal(onp.array(o), onp.full_like(o, contraction_ratio))
+    a_outr_dims = tuple(d for d in range(a.ndim)
+                        if d not in a_cont_dims + a_btch_dims)
+    b_outr_dims = tuple(d for d in range(b.ndim)
+                        if d not in b_cont_dims + b_btch_dims)
 
-    def input_slices_from_output_slice(output_slice):
-        def result(ndim, contracting_dims, batch_dims):
-            other_dims = [i for i in range(ndim) if i not in
-                          contracting_dims and i not in batch_dims]
+    cont_ndim = len(a_cont_dims)
+    btch_ndim = len(a_btch_dims)
 
-            return tuple(slice(None) if i in contracting_dims else
-                         (output_slice[batch_dims[list(batch_dims).index(i)]]
-                          if i in batch_dims else
-                          output_slice[other_dims[other_dims.index(i)]])
-                         for i in range(ndim))
+    # Batch dims to front
+    a_mask = onp.moveaxis(a_mask, a_btch_dims, range(btch_ndim))
+    a_cont_dims_ = tuple(c + sum(1 for b in a_btch_dims if b > c)
+                         for c in a_cont_dims)
+    b_mask = onp.moveaxis(b_mask, b_btch_dims, range(len(b_btch_dims)))
+    b_cont_dims_ = tuple(c + sum(1 for b in b_btch_dims if b > c)
+                         for c in b_cont_dims)
 
-        return (result(a.ndim, a_contracting_dims, a_batch_dims),
-                result(b.ndim, b_contracting_dims, b_batch_dims))
+    a_mask = onp.all(a_mask, a_cont_dims_)
+    b_mask = onp.all(b_mask, b_cont_dims_)
 
-    return sliceableop_update(
-        lax.dot_general_p, old_out, output_mask,
-        input_slices_from_output_slice, a, b,
-        dimension_numbers=dimension_numbers)
-
+    new_outmask = (
+        a_mask[(...,) + len(b_outr_dims) * (onp.newaxis,)]
+        & b_mask[btch_ndim * (slice(None),)
+                 + len(a_outr_dims) * (onp.newaxis,)])
+    for s in util.mask_to_slices(new_outmask &~ outmask):
+        s_btch, s_a, s_b = (s[:btch_ndim],
+                            s[btch_ndim:btch_ndim + len(a_outr_dims)],
+                            s[btch_ndim + len(a_outr_dims):])
+        a_slice = tuple((s_btch + s_a + cont_ndim * (slice(None),))[d] for d in
+                        onp.argsort(a_btch_dims + a_outr_dims + a_cont_dims))
+        b_slice = tuple((s_btch + s_b + cont_ndim * (slice(None),))[d] for d in
+                        onp.argsort(b_btch_dims + b_outr_dims + b_cont_dims))
+        outval = index_update(outval, s,
+                              lax.dot_general_p.bind(
+                                  a[a_slice], b[b_slice],
+                                  dimension_numbers=dimension_numbers,
+                                  precision=precision))
+    return fa.Parray((outval, new_outmask))
 
 fa.update_rules[lax.dot_general_p] = dot_general_update
 
