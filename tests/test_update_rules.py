@@ -59,6 +59,7 @@ def test_reduce_max(): check(lambda x: lax._reduce_max(x, axes=(0,)), (2, 4))
 
 def test_dot_vector_vector(): check(lax.dot, (2,), (2,))
 def test_dot_matrix_vector(): check(lax.dot, (3, 2), (2,))
+def test_dot_vector_matrix(): check(lax.dot, (2,), (2, 3))
 def test_dot_matrix_matrix(): check(lax.dot, (3, 2), (2, 4))
 
 

@@ -163,17 +163,47 @@ for op in reduce_ops:
     fa.update_rules[op] = reduce_update(op)
 
 
-def dot_update(old_out, a, b):
+def dot_update(out, a, b, precision=None):
     a, a_mask = a
     b, b_mask = b
-    return sliceableop_update(
-        lax.dot_p, old_out, onp.equal(
-            onp.dot(a_mask.astype(int), b_mask.astype(int)),
-            onp.shape(b_mask)[0]),
-        lambda s: ((s[0], slice(None)) if len(s) > 0 else (slice(None),),
-                   (slice(None), s[1]) if len(s) > 1 else (slice(None),)),
-        a, b)
-
+    (outval, outmask), = (
+        out or _init_output(lax.dot_p, a, b, precision=precision))
+    if a.ndim == b.ndim == 1:
+        # Vector-vector product
+        if onp.all(a_mask) and onp.all(b_mask) and not outmask:
+            return fa.Parray((lax.dot(a, b, precision=precision), True))
+        else:
+            return fa.Parray((outval, outmask))
+    elif a.ndim == 2 and b.ndim == 1:
+        # Matrix-vector product
+        if onp.all(b_mask):
+            new_outmask = onp.all(a_mask, axis=1)
+            for s in util.mask_to_slices(new_outmask &~ outmask):
+                outval = index_update(
+                    outval, s, lax.dot_p.bind(a[s], b, precision=precision))
+            return fa.Parray((outval, new_outmask))
+        else:
+            return fa.Parray((outval, outmask))
+    elif a.ndim == 1 and b.ndim == 2:
+        # Vector-matrix product
+        if onp.all(a_mask):
+            new_outmask = onp.all(b_mask, axis=0)
+            for s in util.mask_to_slices(new_outmask &~ outmask):
+                outval = index_update(
+                    outval, s, lax.dot_p.bind(a, b[:, s[0]],
+                                              precision=precision))
+            return fa.Parray((outval, new_outmask))
+        else:
+            return fa.Parray((outval, outmask))
+    else:
+        # Matrix-matrix product
+        new_outmask = (onp.all(a_mask, axis=1, keepdims=True)
+                       & onp.all(b_mask, axis=0))
+        for s in util.mask_to_slices(new_outmask &~ outmask):
+            outval = index_update(
+                outval, s, lax.dot_p.bind(
+                    a[s[0]], b[:, s[1]], precision=precision))
+        return fa.Parray((outval, new_outmask))
 
 fa.update_rules[lax.dot_p] = dot_update
 
