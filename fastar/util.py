@@ -1,5 +1,7 @@
 import numpy as np
 
+from jax.ad_util import zeros_like_aval
+from jax.interpreters.batching import get_aval
 from jax.util import safe_map
 from jax.util import safe_zip
 
@@ -21,6 +23,11 @@ def false_mask(val):
         return False
     else:
         return np.full(np.shape(val), False, dtype=bool)
+
+def init_ans(func, *args, **params):
+    args = map(lambda arg: get_aval(arg[0]), args)
+    abstract_out = func.abstract_eval(*args, **params)
+    return zeros_like_aval(abstract_out), false_mask(abstract_out)
 
 def _to_tree(idxs):
     tree = {}

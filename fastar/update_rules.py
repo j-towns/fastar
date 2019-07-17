@@ -20,11 +20,6 @@ zip = safe_zip
 init_value = 0
 
 
-def _init_output(func, *args, **params):
-    args = map(get_aval, args)
-    abstract_out = func.abstract_eval(*args, **params)
-    return (zeros_like_aval(abstract_out), util.false_mask(abstract_out)),
-
 def _unbroadcast_slice(s, shape):
     return tuple(s if dim_sz > 1 else slice(None)
                  for s, dim_sz in zip(s[len(s) - len(shape):], shape))
@@ -37,9 +32,7 @@ def sliceableop_update(func, old_out, output_mask,
     :param input_slices_from_output_slice:
         Specifies which input slices are required for an output slice."""
 
-    (outval, old_outmask), = _init_output(func, *args, **params) if \
-        old_out is None else old_out
-
+    outval, old_outmask = old_out
     new_mask = output_mask & ~old_outmask
     output_slices = util.mask_to_slices(new_mask)
     for output_slice in output_slices:
@@ -54,15 +47,15 @@ def sliceableop_update(func, old_out, output_mask,
 
 # n-ary elementwise operators with broadcasting
 @curry
-def nop_update(op, out, *args):
+def nop_update(op, ans, *args):
     args, arg_masks = zip(*args)
-    (out, out_mask), = out or _init_output(op, *args)
-    new_out_mask = reduce(and_, arg_masks)
-    slices = util.mask_to_slices(new_out_mask &~ out_mask)
+    ans, ans_mask = ans
+    new_ans_mask = reduce(and_, arg_masks)
+    slices = util.mask_to_slices(new_ans_mask &~ ans_mask)
     for s in slices:
         part_args = [a[_unbroadcast_slice(s, np.shape(a))] for a in args]
-        out = index_update(out, s, op.bind(*part_args))
-    return fa.Parray((out, new_out_mask))
+        ans = index_update(ans, s, op.bind(*part_args))
+    return fa.Parray((ans, new_ans_mask))
 
 
 nops = [
@@ -98,17 +91,17 @@ for op in nops:
 # Logit and expit use custom_transforms so their primitives have a different
 # form.
 @curry
-def logexpit_update(op, out, consts, jax_kwargs, x, **params):
+def logexpit_update(op, ans, consts, jax_kwargs, x, **params):
     consts, consts_mask = consts
     jax_kwargs, jax_kwargs_mask = jax_kwargs
     x, x_mask = x
-    (out, out_mask), = out or _init_output(op, consts, jax_kwargs, x, **params)
-    slices = util.mask_to_slices(x_mask &~ out_mask)
+    ans, ans_mask = ans
+    slices = util.mask_to_slices(x_mask &~ ans_mask)
     for s in slices:
         part_x = x[_unbroadcast_slice(s, np.shape(x))]
-        out = index_update(out, s,
+        ans = index_update(ans, s,
                            op.bind(consts, jax_kwargs, part_x, **params))
-    return fa.Parray((out, x_mask))
+    return fa.Parray((ans, x_mask))
 
 for op in [special.expit.prim, special.logit.prim]:
     fa.update_rules[op] = logexpit_update(op)
@@ -137,12 +130,12 @@ for op in cheap_ops:
 
 # Reductions
 @curry
-def reduce_update(op, out, a, **params):
+def reduce_update(op, ans, a, **params):
     a, a_mask = a
-    (out, out_mask), = _init_output(op, a, **params) if out is None else out
+    ans, ans_mask = ans
     axes = params['axes']
-    new_out_mask = onp.all(a_mask, axes)
-    slices = util.mask_to_slices(new_out_mask &~ out_mask)
+    new_ans_mask = onp.all(a_mask, axes)
+    slices = util.mask_to_slices(new_ans_mask &~ ans_mask)
     for s in slices:
         a_slice = list(s)
         for axis in axes:
@@ -150,8 +143,8 @@ def reduce_update(op, out, a, **params):
         a_part = a[tuple(a_slice)]
         if 'input_shape' in params:
             params['input_shape'] = np.shape(a_part)
-        out = index_update(out, s, op.bind(a_part, **params))
-    return fa.Parray((out, new_out_mask))
+        ans = index_update(ans, s, op.bind(a_part, **params))
+    return fa.Parray((ans, new_ans_mask))
 
 reduce_ops = [
     lax.reduce_max_p,
@@ -163,58 +156,53 @@ for op in reduce_ops:
     fa.update_rules[op] = reduce_update(op)
 
 
-def dot_update(out, a, b, precision=None):
+def dot_update(ans, a, b, precision=None):
     a, a_mask = a
     b, b_mask = b
-    (outval, outmask), = (
-        out or _init_output(lax.dot_p, a, b, precision=precision))
+    ansval, ansmask = ans
     if a.ndim == b.ndim == 1:
         # Vector-vector product
-        if onp.all(a_mask) and onp.all(b_mask) and not outmask:
+        if onp.all(a_mask) and onp.all(b_mask) and not ansmask:
             return fa.Parray((lax.dot(a, b, precision=precision), True))
         else:
-            return fa.Parray((outval, outmask))
+            return ans
     elif a.ndim == 2 and b.ndim == 1:
         # Matrix-vector product
         if onp.all(b_mask):
-            new_outmask = onp.all(a_mask, 1)
-            for s in util.mask_to_slices(new_outmask &~ outmask):
-                outval = index_update(
-                    outval, s, lax.dot_p.bind(a[s], b, precision=precision))
-            return fa.Parray((outval, new_outmask))
+            new_ansmask = onp.all(a_mask, 1)
+            for s in util.mask_to_slices(new_ansmask &~ ansmask):
+                ansval = index_update(
+                    ansval, s, lax.dot_p.bind(a[s], b, precision=precision))
+            return fa.Parray((ansval, new_ansmask))
         else:
-            return fa.Parray((outval, outmask))
+            return ans
     elif a.ndim == 1 and b.ndim == 2:
         # Vector-matrix product
         if onp.all(a_mask):
-            new_outmask = onp.all(b_mask, 0)
-            for s in util.mask_to_slices(new_outmask &~ outmask):
-                outval = index_update(
-                    outval, s, lax.dot_p.bind(a, b[:, s[0]],
+            new_ansmask = onp.all(b_mask, 0)
+            for s in util.mask_to_slices(new_ansmask &~ ansmask):
+                ansval = index_update(
+                    ansval, s, lax.dot_p.bind(a, b[:, s[0]],
                                               precision=precision))
-            return fa.Parray((outval, new_outmask))
+            return fa.Parray((ansval, new_ansmask))
         else:
-            return fa.Parray((outval, outmask))
+            return fa.Parray((ansval, ansmask))
     else:
         # Matrix-matrix product
-        new_outmask = onp.all(a_mask, 1, keepdims=True) & onp.all(b_mask, 0)
-        for s in util.mask_to_slices(new_outmask &~ outmask):
-            outval = index_update(
-                outval, s, lax.dot_p.bind(
+        new_ansmask = onp.all(a_mask, 1, keepdims=True) & onp.all(b_mask, 0)
+        for s in util.mask_to_slices(new_ansmask &~ ansmask):
+            ansval = index_update(
+                ansval, s, lax.dot_p.bind(
                     a[s[0]], b[:, s[1]], precision=precision))
-        return fa.Parray((outval, new_outmask))
+        return fa.Parray((ansval, new_ansmask))
 
 fa.update_rules[lax.dot_p] = dot_update
 
 
-def dot_general_update(out, a, b, dimension_numbers, precision=None):
+def dot_general_update(ans, a, b, dimension_numbers, precision=None):
     a, a_mask = a
     b, b_mask = b
-    (outval, outmask), = (
-        out or _init_output(
-            lax.dot_general_p, a, b, dimension_numbers=dimension_numbers,
-            precision=precision))
-
+    ansval, ansmask = ans
     (a_cont_dims, b_cont_dims), (a_btch_dims, b_btch_dims) = dimension_numbers
 
     a_outr_dims = tuple(d for d in range(a.ndim)
@@ -236,11 +224,11 @@ def dot_general_update(out, a, b, dimension_numbers, precision=None):
     a_mask = onp.all(a_mask, a_cont_dims_)
     b_mask = onp.all(b_mask, b_cont_dims_)
 
-    new_outmask = (
+    new_ansmask = (
         a_mask[(...,) + len(b_outr_dims) * (onp.newaxis,)]
         & b_mask[btch_ndim * (slice(None),)
                  + len(a_outr_dims) * (onp.newaxis,)])
-    for s in util.mask_to_slices(new_outmask &~ outmask):
+    for s in util.mask_to_slices(new_ansmask &~ ansmask):
         s_btch, s_a, s_b = (s[:btch_ndim],
                             s[btch_ndim:btch_ndim + len(a_outr_dims)],
                             s[btch_ndim + len(a_outr_dims):])
@@ -248,12 +236,12 @@ def dot_general_update(out, a, b, dimension_numbers, precision=None):
                         onp.argsort(a_btch_dims + a_outr_dims + a_cont_dims))
         b_slice = tuple((s_btch + s_b + cont_ndim * (slice(None),))[d] for d in
                         onp.argsort(b_btch_dims + b_outr_dims + b_cont_dims))
-        outval = index_update(outval, s,
+        ansval = index_update(ansval, s,
                               lax.dot_general_p.bind(
                                   a[a_slice], b[b_slice],
                                   dimension_numbers=dimension_numbers,
                                   precision=precision))
-    return fa.Parray((outval, new_outmask))
+    return fa.Parray((ansval, new_ansmask))
 
 fa.update_rules[lax.dot_general_p] = dot_general_update
 
@@ -265,9 +253,7 @@ def pad_update(old_out, input, padding_value, padding_config):
 
     input, input_mask = input
     padding_value, padding_value_mask = padding_value
-    (outval, old_outmask), = _init_output(lax.pad_p, input, padding_value,
-                                          padding_config=padding_config) if \
-        old_out is None else old_out
+    outval, old_outmask = old_out
 
     unpad_slice = tuple(
         slice(lo if lo > 0 else None,

@@ -54,7 +54,8 @@ def firstpass(jaxpr, consts, *args):
         in_vals = map(read, eqn.invars)
         if eqn.bound_subjaxprs:
             raise NotImplementedError
-        ans = get_update(eqn.primitive)(None, *in_vals, **eqn.params)
+        ans = Parray(util.init_ans(eqn.primitive, *in_vals, **eqn.params))
+        ans = get_update(eqn.primitive)(ans, *in_vals, **eqn.params)
         outvals = list(ans) if eqn.destructure else [ans]
         map(write, eqn.outvars, outvals)
     return read(jaxpr.outvar), env
@@ -85,10 +86,11 @@ def fastpass(jaxpr, consts, old_env, *args):
     map(write, jaxpr.invars, args)
     for eqn in jaxpr.eqns:
         old_outvals = map(read_old, eqn.outvars)
+        old_ans = old_outvals if eqn.destructure else old_outvals[0]
         in_vals = map(read, eqn.invars)
         if eqn.bound_subjaxprs:
             raise NotImplementedError
-        ans = get_update(eqn.primitive)(old_outvals, *in_vals, **eqn.params)
+        ans = get_update(eqn.primitive)(old_ans, *in_vals, **eqn.params)
         outvals = list(ans) if eqn.destructure else [ans]
         map(write, eqn.outvars, outvals)
     return read(jaxpr.outvar), env
