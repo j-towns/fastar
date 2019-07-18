@@ -225,7 +225,7 @@ def dot_general_update(ans, a, b, dimension_numbers, precision=None):
     b_mask = onp.all(b_mask, b_cont_dims_)
 
     new_ansmask = (
-        a_mask[(...,) + len(b_outr_dims) * (onp.newaxis,)]
+        a_mask[(Ellipsis,) + len(b_outr_dims) * (onp.newaxis,)]
         & b_mask[btch_ndim * (slice(None),)
                  + len(a_outr_dims) * (onp.newaxis,)])
     for s in util.mask_to_slices(new_ansmask &~ ansmask):
