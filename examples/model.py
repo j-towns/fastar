@@ -84,7 +84,9 @@ def PixelCNNPP(nr_resnet=5, nr_filters=160, nr_logistic_mix=10, **resnet_kwargs)
 
 def loss(pcnn, params, rng, image):
     pcnn_out = nn.apply_fun(pcnn, params, rng, image)
-    return nn.pcnn_out_to_conditional_params(image, pcnn_out)
+    conditional_params = nn.pcnn_out_to_conditional_params(image, pcnn_out)
+    return -(nn.conditional_params_to_logprob(image, conditional_params)
+             * np.log2(np.e) / image.size)
 
 def sample_fp(pcnn, params, rng):
     rng_pcnn, rng_sample = random.split(rng)

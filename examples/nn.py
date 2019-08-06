@@ -368,9 +368,8 @@ def conditional_params_to_logprob(x, conditional_params):
     upper_cdf = np.where(x ==  1, 1, cdf( 1 / 255))
     lower_cdf = np.where(x == -1, 0, cdf(-1 / 255))
     all_logprobs = np.sum(np.log(np.maximum(upper_cdf - lower_cdf, 1e-12)), -1)
-    log_mix_coeffs = log_prob_from_logits(logit_probs)
-    return np.sum(
-        np.mean(logsumexp(log_mix_coeffs + all_logprobs, axis=0), axis=0))
+    log_mix_coeffs = logit_probs - logsumexp(logit_probs, 0, keepdims=True)
+    return np.sum(logsumexp(log_mix_coeffs + all_logprobs, axis=0))
 
 def _gumbel_max(rng, logit_probs):
     return np.argmax(random.gumbel(rng, logit_probs.shape, logit_probs.dtype)
