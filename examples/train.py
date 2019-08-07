@@ -24,14 +24,18 @@ import nn
 @click.option('--step_size', default=.001)
 @click.option('--decay_rate', default=.999995)
 @click.option('--model_dir', default='./log/model', type=click.Path())
-@click.option('--test_batch_size', default=128)
+@click.option('--test_batch_size', default=16)
 @click.option('--nr_filters', default=160)
 @click.option('--nr_resnet', default=6)
+@click.option('--run_name', default=time.strftime('%Y%m%d-%H%M%S'))
 def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
-         **model_kwargs):
-    model_dir = Path(model_dir)
+         run_name, **model_kwargs):
+
+    print('\n'.join(f'{k}: {v}' for k, v in
+                    click.get_current_context().params.items()))
 
     t0 = time.time()
+    model_dir = Path(model_dir)
     tf.random.set_random_seed(0)
     rng = random.PRNGKey(0)
     cifar = tfds.load('cifar10')
@@ -70,10 +74,9 @@ def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
                               rng_init_2, next(test_batches))
     opt_state = opt_init(init_params)
 
-    run_name = time.strftime('%Y%m%d-%H%M%S')
     for epoch in range(epochs):
         model_dir.mkdir(parents=True, exist_ok=True)
-        with open(str(model_dir / f"{run_name}.npy"), 'xb') as file:
+        with (model_dir / f'{run_name}.npy').open('wb') as file:
             pickle.dump(opt_get_params(opt_state), file)
         print(f"Saved model after {epoch} epochs.")
 
@@ -85,7 +88,8 @@ def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
                 rng, rng_test = random.split(rng)
                 test_loss = loss(opt_get_params(opt_state), rng_test, batch)
                 print(f"Epoch {epoch}, iteration {i}, "
-                      f"train loss {train_loss}, test loss {test_loss} "
+                      f"train loss {train_loss:.4f}, "
+                      f"test loss {test_loss:.4f} "
                       f"({time.time() - t0:.2f}s)")
 
 if __name__ == '__main__':
