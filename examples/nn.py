@@ -385,3 +385,10 @@ def conditional_params_to_sample(rng, conditional_params):
     inv_scales = np.take_along_axis(inv_scales, mix_idx, 0)[0]
     return (means + random.logistic(rng_logistic, means.shape, means.dtype)
             / inv_scales)
+
+def centre(image):
+    assert image.dtype == np.uint8
+    return image / 127.5 - 1
+
+def uncentre(image):
+    return np.uint8(np.clip(127.5 * (image + 1), 0, 255))

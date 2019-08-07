@@ -83,6 +83,7 @@ def PixelCNNPP(nr_resnet=5, nr_filters=160, nr_logistic_mix=10, **resnet_kwargs)
 
 
 def loss(pcnn, params, rng, image):
+    image = nn.centre(image)
     pcnn_out = nn.apply_fun(pcnn, params, rng, image)
     conditional_params = nn.pcnn_out_to_conditional_params(image, pcnn_out)
     return -(nn.conditional_params_to_logprob(image, conditional_params)
@@ -91,7 +92,9 @@ def loss(pcnn, params, rng, image):
 def sample_fp(pcnn, params, rng):
     rng_pcnn, rng_sample = random.split(rng)
     def fixed_point(image):
+        image = nn.centre(image)
         pcnn_out = nn.apply_fun(pcnn, params, rng_pcnn, image)
         conditional_params = nn.pcnn_out_to_conditional_params(image, pcnn_out)
-        return nn.conditional_params_to_sample(rng_sample, conditional_params)
+        return nn.uncentre(
+            nn.conditional_params_to_sample(rng_sample, conditional_params))
     return fixed_point
