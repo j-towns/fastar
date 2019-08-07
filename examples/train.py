@@ -78,17 +78,15 @@ def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
         print(f"Saved model after {epoch} epochs.")
 
         for i, batch in enumerate(train_batches()):
+            rng, rng_update = random.split(rng)
+            opt_state, train_loss = update(i, opt_state, rng_update, batch)
+
             if i % 100 == 0 or i < 10:
                 rng, rng_test = random.split(rng)
                 test_loss = loss(opt_get_params(opt_state), rng_test, batch)
                 print(f"Epoch {epoch}, iteration {i}, "
-                      f"test loss {test_loss} ({time.time() - t0:.2f}s)")
-
-            rng, rng_update = random.split(rng)
-            opt_state, train_loss = update(i, opt_state, rng_update, batch)
-            print(f"Epoch {epoch}, iteration {i}, "
-                  f"train loss {train_loss} ({time.time() - t0:.2f}s)")
-
+                      f"train loss {train_loss}, test loss {test_loss} "
+                      f"({time.time() - t0:.2f}s)")
 
 if __name__ == '__main__':
     main()
