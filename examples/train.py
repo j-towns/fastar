@@ -29,6 +29,8 @@ import nn
 @click.option('--nr_resnet', default=6)
 def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
          **model_kwargs):
+    model_dir = Path(model_dir)
+
     t0 = time.time()
     tf.random.set_random_seed(0)
     rng = random.PRNGKey(0)
