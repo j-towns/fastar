@@ -28,8 +28,9 @@ import nn
 @click.option('--nr_filters', default=160)
 @click.option('--nr_resnet', default=6)
 @click.option('--run_name', default=time.strftime('%Y%m%d-%H%M%S'))
+@click.option('--test/--train', default=False)
 def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
-         run_name, **model_kwargs):
+         run_name, test, **model_kwargs):
 
     print('\n'.join(f'{k}: {v}' for k, v in
                     click.get_current_context().params.items()))
@@ -45,9 +46,14 @@ def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
         return tfds.as_numpy(
             cifar['train'].map(lambda el: el['image']).shuffle(1000)
             .batch(batch_size).prefetch(1))
-    test_batches = tfds.as_numpy(
-        cifar['test'].map(lambda el: el['image']).repeat().shuffle(1000)
-        .batch(test_batch_size).prefetch(1))
+
+    def test_batches(shuffle_and_repeat=False):
+        l = cifar['test'].map(lambda el: el['image'])
+
+        if shuffle_and_repeat:
+            l = l.repeat().shuffle(1000)
+
+        return tfds.as_numpy(l.batch(test_batch_size).prefetch(1))
 
     @jit
     def loss(params, rng, batch):
@@ -71,6 +77,24 @@ def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
 
     rng, rng_init_1, rng_init_2 = random.split(rng, 3)
     rng_init_2 = random.split(rng_init_2, test_batch_size)
+
+    if test:
+        with model_file.open('rb') as file:
+            params = pickle.load(file)
+
+        total_loss = 0.
+        total_count = 0
+        for i, batch in enumerate(test_batches(shuffle_and_repeat=False)):
+            rng, rng_test = random.split(rng)
+            test_loss = loss(params, rng_test, batch)
+            print(f"Batch {i}, test loss {test_loss:.3f}")
+            total_count += len(batch)
+            total_loss += test_loss * len(batch)
+
+        print(f"Overall test loss: {total_loss / total_count:.4f}")
+        return
+
+    test_batches = test_batches(shuffle_and_repeat=True)
     init_params = nn.init_fun(vmap(pcnn, (0, 0)), rng_init_1,
                               rng_init_2, next(test_batches))
     opt_state = opt_init(init_params)
