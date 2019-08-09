@@ -23,7 +23,7 @@ import nn
 @click.option('--epochs', default=10)
 @click.option('--step_size', default=.001)
 @click.option('--decay_rate', default=.999995)
-@click.option('--model_dir', default='./log/model', type=click.Path())
+@click.option('--model_dir', default='./log/model')
 @click.option('--test_batch_size', default=16)
 @click.option('--nr_filters', default=160)
 @click.option('--nr_resnet', default=6)
@@ -36,6 +36,7 @@ def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
 
     t0 = time.time()
     model_dir = Path(model_dir)
+    model_file = model_dir / f'{run_name}.npy'
     tf.random.set_random_seed(0)
     rng = random.PRNGKey(0)
     cifar = tfds.load('cifar10')
@@ -76,7 +77,7 @@ def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
 
     for epoch in range(epochs):
         model_dir.mkdir(parents=True, exist_ok=True)
-        with (model_dir / f'{run_name}.npy').open('wb') as file:
+        with model_file.open('wb') as file:
             pickle.dump(opt_get_params(opt_state), file)
         print(f"Saved model after {epoch} epochs.")
 
@@ -86,10 +87,10 @@ def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
 
             if i % 100 == 0 or i < 10:
                 rng, rng_test = random.split(rng)
-                test_loss = loss(opt_get_params(opt_state), rng_test, batch)
+                test_loss = loss(opt_get_params(opt_state), rng_test, next(test_batches))
                 print(f"Epoch {epoch}, iteration {i}, "
-                      f"train loss {train_loss:.4f}, "
-                      f"test loss {test_loss:.4f} "
+                      f"train loss {train_loss:.3f}, "
+                      f"test loss {test_loss:.3f} "
                       f"({time.time() - t0:.2f}s)")
 
 if __name__ == '__main__':
