@@ -1,9 +1,9 @@
 import numpy as np
 
-from jax.ad_util import zeros_like_aval
-from jax.interpreters.batching import get_aval
+from jax.interpreters.xla import abstractify
 from jax.util import safe_map
 from jax.util import safe_zip
+from jax import tree_util
 
 map = safe_map
 zip = safe_zip
@@ -24,10 +24,35 @@ def false_mask(val):
     else:
         return np.full(np.shape(val), False, dtype=bool)
 
-def init_ans(func, *args, **params):
-    args = map(lambda arg: get_aval(arg[0]), args)
-    abstract_out = func.abstract_eval(*args, **params)
-    return zeros_like_aval(abstract_out), false_mask(abstract_out)
+def mask_all(parray):
+    _, mask = parray
+    if isinstance(mask, tuple):
+        return all(mask_all(m) for m in mask)
+    else:
+        return np.all(mask)
+
+def tree_unmask(tree):
+    arrs = tree_util.tree_map(lambda arr: arr[0], tree)
+    masks = tree_util.tree_map(lambda arr: arr[1], tree)
+    return arrs, masks
+
+def tree_unmask_hashably(tree):
+    arrs, masks = tree_unmask(tree)
+    masks = tree_util.tree_map(HashableMask, masks)
+    masks, treedef = tree_util.process_pytree(tuple, masks)
+    return arrs, masks, treedef
+
+class HashableMask(object):
+    def __init__(self, mask):
+        mask.flags.writeable = False
+        self.mask = mask
+
+    def __hash__(self):
+        return hash(self.mask.tostring())
+
+    def __eq__(self, other):
+        return np.all(self.mask == other.mask)
+
 
 def _to_tree(idxs):
     tree = {}

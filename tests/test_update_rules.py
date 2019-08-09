@@ -1,3 +1,5 @@
+from jax import jit
+
 import jax.lax as lax
 import numpy as np
 import jax.scipy.special as special
@@ -109,3 +111,7 @@ def test_convolution(
             strides, padding, lhs_dilation=lhs_dilation,
             dimension_numbers=dimension_numbers),
         np.take(lhs_shape, lhs_perm), rtol=1e-4, atol=1e-6)
+
+
+def test_jit(): check(jit(lambda x: x * 2), (1,))
+def test_jit_freevar(): check(lambda x, y: jit(lambda x: x * y)(x), (1,), (1,))
