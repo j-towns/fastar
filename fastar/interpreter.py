@@ -267,7 +267,7 @@ class Parray(tuple):
     np.all(~computed & arr == 0).
     """
     pass
-parray = lambda arr, mask: parray(arr, mask)
+parray = lambda arr, mask: Parray((arr, mask))
 
 ## High level API
 def accelerate(fun):
