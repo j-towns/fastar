@@ -12,7 +12,7 @@ def true_mask(val):
     if isinstance(val, tuple):
         return tuple(true_mask(v) for v in val)
     elif np.isscalar(val):
-        return True
+        return np.array(True)
     else:
         return np.full(np.shape(val), True, dtype=bool)
 
@@ -20,7 +20,7 @@ def false_mask(val):
     if isinstance(val, tuple):
         return tuple(false_mask(v) for v in val)
     elif np.isscalar(val):
-        return False
+        return np.array(False)
     else:
         return np.full(np.shape(val), False, dtype=bool)
 
