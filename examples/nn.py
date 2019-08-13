@@ -391,4 +391,4 @@ def centre(image):
     return image / 127.5 - 1
 
 def uncentre(image):
-    return np.uint8(np.clip(127.5 * (image + 1), 0, 255))
+    return np.asarray(np.clip(127.5 * (image + 1), 0, 255), dtype='uint8')

@@ -311,7 +311,7 @@ def pad_update(old_out, input, padding_value, padding_config):
             for s, (lo, _, interior) in
             zip(cropped_input_slice, padding_config))
 
-        assert np.all(outval[output_slice] == init_value)
+        # assert np.all(outval[output_slice] == init_value)
         outval = index_update(outval, output_slice, input[input_slice])
 
     return fa.Parray((outval, output_mask))

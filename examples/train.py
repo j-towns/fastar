@@ -27,6 +27,7 @@ import nn
 @click.option('--test_batch_size', default=16)
 @click.option('--nr_filters', default=160)
 @click.option('--nr_resnet', default=6)
+@click.option('--dropout_p', default=0.5)
 @click.option('--run_name', default=time.strftime('%Y%m%d-%H%M%S'))
 @click.option('--test/--train', default=False)
 def main(batch_size, epochs, step_size, decay_rate, model_dir, test_batch_size,
