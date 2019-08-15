@@ -5,6 +5,7 @@ import re
 
 import librosa
 import numpy as np
+from observations import maybe_download_and_extract
 
 FILE_PATTERN = r'p([0-9]+)_([0-9]+)\.wav'
 
@@ -114,3 +115,13 @@ def audio_loader(audio_dir, receptive_field,
                     data = []
                 audio = audio[sample_size:, :]
     return generator
+
+def vctk(data_dir, receptive_field, sample_size,
+         silence_threshold, batch_size):
+    if not 'VCTK-Corpus' in os.listdir(data_dir):
+        maybe_download_and_extract(data_dir,
+                                   url='https://datashare.is.ed.ac.uk/bitstream/handle/10283/2651/'
+                                       'VCTK-Corpus.zip?sequence=2&isAllowed=y',
+                                   save_file_name='VCTK-Corpus.zip')
+    return audio_loader(os.path.join(data_dir, 'VCTK-Corpus', 'wav48'),
+                        receptive_field, sample_size, silence_threshold, batch_size)

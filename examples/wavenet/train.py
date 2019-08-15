@@ -8,7 +8,7 @@ from jax.experimental import optimizers
 from jax import jit, value_and_grad, curry, np, random
 
 import numpy as onp
-from wlib.audio_reader import audio_loader
+from wlib.audio_reader import vctk
 from wlib.mixture import discretized_mix_logistic_loss
 from wlib.model import Wavenet, calculate_receptive_field
 
@@ -103,9 +103,9 @@ def main():
                                                 wavenet_params["dilations"],
                                                 wavenet_params["scalar_input"],
                                                 wavenet_params["initial_filter_width"])
-    data_generator = audio_loader(args.data_dir, receptive_field,
-                                  args.sample_size, args.silence_threshold,
-                                  args.batch_size)
+    data_generator = vctk(args.data_dir, receptive_field,
+                          args.sample_size, args.silence_threshold,
+                          args.batch_size)
     print('Made data generator')
 
     init_batch = next(data_generator())
