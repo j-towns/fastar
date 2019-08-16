@@ -1,11 +1,5 @@
-from functools import partial
-
 from jax import lax, numpy as np
-from jaxnet import GeneralConv, Sequential, parametrized, relu, sigmoid
-
-Conv1D = partial(GeneralConv, ('NTC', 'IOT', 'NTC'))  # TODO: IOT -> TIO
-CausalConv1D = Conv1D  # TODO May require a shift to make it "causal"
-
+from jaxnet import Sequential, parametrized, relu, sigmoid, Conv1D
 
 def calculate_receptive_field(filter_width, dilations, scalar_input,
                               initial_filter_width):
@@ -25,9 +19,9 @@ def ResBlock(dilation_channels, residual_channels,
     @parametrized
     def res_layer(
             inputs,
-            gate=Sequential(CausalConv1D(dilation_channels, (filter_width,),
+            gate=Sequential(Conv1D(dilation_channels, (filter_width,),
                                          dilation=(dilation,)), sigmoid),
-            filter=Sequential(CausalConv1D(dilation_channels, (filter_width,),
+            filter=Sequential(Conv1D(dilation_channels, (filter_width,),
                                            dilation=(dilation,)), np.tanh),
             nin=Conv1D(residual_channels, (1,), padding='SAME'),
             skip_conv=Conv1D(residual_channels, (1,), padding='SAME')):
@@ -79,7 +73,7 @@ def Wavenet(dilations, filter_width, initial_filter_width, out_width,
 
     @parametrized
     def wavenet(inputs,
-                pre=CausalConv1D(residual_channels, (initial_filter_width,)),
+                pre=Conv1D(residual_channels, (initial_filter_width,)),
                 net=Sequential(*(ResBlock(dilation_channels, residual_channels,
                                           filter_width, dilation, out_width)
                                  for dilation in dilations)),
