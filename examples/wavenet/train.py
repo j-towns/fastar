@@ -3,12 +3,11 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-import dill
 import numpy as onp
 from audio_reader import vctk
-from jax import jit, value_and_grad, curry, np, random
+from jax import jit, value_and_grad, np, random
 from jax.experimental import optimizers
-from jaxnet import parametrized
+from jaxnet import parametrized, save_params, load_params
 from mixture import discretized_mix_logistic_loss
 from model import Wavenet, calculate_receptive_field
 
@@ -78,32 +77,6 @@ def main():
     with open(args.wavenet_params, 'r') as f:
         wavenet_params = json.load(f)
 
-    @curry
-    def jit_with_handler(fun, *a, **kwargs):
-        if args.no_jit:
-            return fun(*a, **kwargs)
-
-        try:
-            return jit(fun)(*a, **kwargs)
-        except Exception as e:
-            print(str(e))
-            return fun(*a, **kwargs)
-
-    def model_dir():
-        return Path(args.model_dir)
-
-    def restored_params_or_null():
-        if not args.restore_file:
-            return None
-
-        with (model_dir() / args.restore_file).open('rb') as file:
-            return dill.load(file)
-
-    def save(params):
-        model_dir().mkdir(parents=True, exist_ok=True)
-        with (model_dir() / f'{STARTED_DATESTRING}.npy').open('wb') as file:
-            dill.dump(params, file)
-
     receptive_field = calculate_receptive_field(wavenet_params["filter_width"],
                                                 wavenet_params["dilations"],
                                                 wavenet_params["scalar_input"],
@@ -115,9 +88,7 @@ def main():
 
     init_batch = next(get_batches())
     print(f'Input batch shape: {init_batch.shape}')
-
-    seq_len = init_batch.shape[1]
-    output_width = seq_len - receptive_field + 1
+    output_width = init_batch.shape[1] - receptive_field + 1
 
     wavenet = Wavenet(wavenet_params["dilations"],
                       wavenet_params["filter_width"],
@@ -144,16 +115,15 @@ def main():
             step_size=args.learning_rate, decay_steps=1,
             decay_rate=args.lr_decay))
 
-    restored_opt_state = restored_params_or_null()
-    if restored_opt_state:
-        opt_state = restored_opt_state
+    model_dir = Path(args.model_dir)
+    if args.restore_file:
+        opt_state = load_params(model_dir / args.restore_file)
         print('Restored parameters.')
     else:
-        init_params = loss.init_params(rng, init_batch)
-        opt_state = opt_init(init_params)
+        opt_state = opt_init(loss.init_params(rng, init_batch))
         print('Initialized parameters.')
 
-    @jit_with_handler
+    @jit
     def update(i, opt_state, batch):
         params = get_params(opt_state)
         train_loss, gradient = value_and_grad(loss)(params, batch)
@@ -161,9 +131,10 @@ def main():
 
     def save_and_print(i, ls, params):
         print('Saving...')
-        save(params)
+        model_dir.mkdir(parents=True, exist_ok=True)
+        save_params(params, model_dir / f'{STARTED_DATESTRING}.npy')
         print(f'Saved model after {i} iterations.')
-        onp.savetxt(str(model_dir() / f'{STARTED_DATESTRING}_losses'), ls)
+        onp.savetxt(str(model_dir / f'{STARTED_DATESTRING}_losses'), ls)
 
     epoch = 0
     step = 0
