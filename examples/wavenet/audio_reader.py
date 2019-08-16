@@ -2,10 +2,11 @@ import fnmatch
 import os
 import random
 import re
+import zipfile
+from pathlib import Path
 
 import librosa
 import numpy as np
-from observations import maybe_download_and_extract
 
 FILE_PATTERN = r'p([0-9]+)_([0-9]+)\.wav'
 
@@ -56,7 +57,8 @@ def load_generic_audio(directory, sample_rate=None):
             # The file name matches the pattern for containing ids.
             category_id = int(ids[0][0])
         if sample_rate is None:
-            audio, _ = librosa.load(filename, sr=None, mono=True)  # keep the true sampling rate
+            audio, _ = librosa.load(filename, sr=None,
+                                    mono=True)  # keep the true sampling rate
         else:
             audio, _ = librosa.load(filename, sr=sample_rate, mono=True)
         audio = audio.reshape(-1, 1)
@@ -89,10 +91,7 @@ def audio_loader(audio_dir, receptive_field,
     def generator():
         data = []
         iterator = load_generic_audio(audio_dir)
-        stop = False
         for audio, filename, _ in iterator:
-            if stop:
-                break
             audio = trim_silence(audio[:, 0], silence_threshold)
             audio = audio.reshape(-1, 1)
             if audio.size == 0:
@@ -114,14 +113,26 @@ def audio_loader(audio_dir, receptive_field,
                     yield np.stack(data).astype('float32')
                     data = []
                 audio = audio[sample_size:, :]
+
     return generator
+
 
 def vctk(data_dir, receptive_field, sample_size,
          silence_threshold, batch_size):
-    if not 'VCTK-Corpus' in os.listdir(data_dir):
-        maybe_download_and_extract(data_dir,
-                                   url='https://datashare.is.ed.ac.uk/bitstream/handle/10283/2651/'
-                                       'VCTK-Corpus.zip?sequence=2&isAllowed=y',
-                                   save_file_name='VCTK-Corpus.zip')
-    return audio_loader(os.path.join(data_dir, 'VCTK-Corpus', 'wav48'),
-                        receptive_field, sample_size, silence_threshold, batch_size)
+    data_dir = Path(data_dir)
+    data_dir.mkdir(exist_ok=True)
+    url = 'https://datashare.is.ed.ac.uk/bitstream/handle/10283/2651/' \
+          'VCTK-Corpus.zip?sequence=2&isAllowed=y'
+
+    zip_file = data_dir / 'VCTK-Corpus.zip'
+
+    corpus_name = 'VCTK-Corpus'
+    if not corpus_name in os.listdir(str(data_dir)):
+        print(f'Dowloading {corpus_name} (~10GB zip)...')
+        # with urllib.request.urlopen(url) as response, zip_file.open('wb') as out_file:
+        #    shutil.copyfileobj(response, out_file)
+        with zipfile.ZipFile(str(zip_file)) as f:
+            f.extractall(str(data_dir))
+    return audio_loader(str(data_dir / corpus_name / 'wav48'),
+                        receptive_field, sample_size, silence_threshold,
+                        batch_size)

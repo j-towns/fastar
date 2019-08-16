@@ -3,18 +3,8 @@ Implementation of mixture of logistic distributions in numpy
 """
 import jax.numpy as np
 from jax.scipy.special import logsumexp
-from jax.scipy.special import expit as sigmoid
 import jax.random as random
-
-
-def softplus(x):
-    return np.logaddexp(0, x)
-
-
-def log_prob_from_logits(x, axis):
-    """numerically stable log_softmax implementation that prevents overflow"""
-    x = x - np.max(x, axis=axis, keepdims=True)
-    return x - logsumexp(x, axis=axis, keepdims=True)
+from jaxnet import softplus, sigmoid, logsoftmax
 
 
 def one_hot(x, depth, dtype=np.float32):
@@ -65,7 +55,7 @@ def discretized_mix_logistic_loss(theta, y, num_class=256, log_scale_min=-7.):
                                            np.log(np.maximum(cdf_delta, 1e-12)),
                                            log_pdf_mid - np.log((num_class - 1) / 2))))
 
-    log_probs = log_probs + log_prob_from_logits(logit_probs, -1)
+    log_probs = log_probs + logsoftmax(logit_probs)
     return -np.sum(logsumexp(log_probs, axis=-1), axis=-1)
 
 

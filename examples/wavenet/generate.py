@@ -4,20 +4,15 @@ from __future__ import print_function
 import argparse
 import json
 import pickle
-from pathlib import Path
-from collections import deque
 from functools import partial
-import time
+from pathlib import Path
 
+import librosa
+import numpy as onp
+from jax import jit, curry, np, random
 from jax.experimental import optimizers
 from jax.scipy.special import logit
-from jax import jit, value_and_grad, curry, pmap, \
-    device_count, np, random, grad
-
-import numpy as onp
-from lib.model import WaveNetModel
-from lib.model_jax import Wavenet
-import librosa
+from model import Wavenet
 
 rng = random.PRNGKey(42)
 
@@ -42,7 +37,7 @@ def get_arguments():
         """Ensure argument is a positive float."""
         if float(f) < 0:
             raise argparse.ArgumentTypeError(
-                    'Argument must be greater than zero')
+                'Argument must be greater than zero')
         return float(f)
 
     parser = argparse.ArgumentParser(description='WaveNet generation script')
@@ -63,13 +58,13 @@ def get_arguments():
         type=str,
         default=LOGDIR,
         help='Directory in which to store the logging '
-        'information for TensorBoard.')
+             'information for TensorBoard.')
     parser.add_argument(
         '--restore_file',
         type=str,
         default=None,
         help='Directory in which to store the checkpointed params '
-        'information for TensorBoard.')
+             'information for TensorBoard.')
     parser.add_argument(
         '--wavenet_params',
         type=str,
@@ -106,8 +101,9 @@ def logistic_mix_sample(theta, rng, log_scale_min=-7., num_class=256):
 
     def one_hot(x, dtype=np.float32):
         """Create a one-hot encoding of x of size k."""
-        shape = ((1,) * (x.ndim-1) + (nr_mix,))
-        return np.array(x[..., np.newaxis] == np.arange(nr_mix).reshape(shape), dtype)
+        shape = ((1,) * (x.ndim - 1) + (nr_mix,))
+        return np.array(x[..., np.newaxis] == np.arange(nr_mix).reshape(shape),
+                        dtype)
 
     # Use the Gumbel max to sample a mixture indicator
     rng, mix_rng = random.split(rng)
@@ -116,15 +112,17 @@ def logistic_mix_sample(theta, rng, log_scale_min=-7., num_class=256):
     mean = np.sum(means * mixs, axis=-1)
     inv_scale = np.sum(inv_scales * mixs, axis=-1)
     scaled_samp = inv_scale * logit(random.uniform(rng, mean.shape)) + mean
-    unscaled_samp = (num_class/2 * scaled_samp) + num_class/2
+    unscaled_samp = (num_class / 2 * scaled_samp) + num_class / 2
     rounded = np.round(unscaled_samp)
     rounded = np.where(rounded < 0, 0, rounded)
     rounded = np.where(rounded > num_class, num_class - 1, rounded)
     return rounded
 
+
 def save_wav(waveform, sample_rate, filename):
     librosa.output.write_wav(filename, waveform, sample_rate)
     print('Updated wav file at {}'.format(filename))
+
 
 def main():
     args = get_arguments()
@@ -183,7 +181,8 @@ def main():
         out_theta = w_apply(input_)
         sample = np.squeeze(logistic_mix_sample(out_theta, rng))
         samples.append(sample)
-        input_ = np.concatenate([sample.reshape((-1, 1,1)), input_[:, :-1, :]], axis=1)
+        input_ = np.concatenate(
+            [sample.reshape((-1, 1, 1)), input_[:, :-1, :]], axis=1)
 
     samples = onp.array(samples)
     save_wav(samples, 44000, 'test.wav')
