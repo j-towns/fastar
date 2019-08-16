@@ -45,7 +45,7 @@ def load_generic_audio(directory, sample_rate=None):
     '''Generator that yields audio waveforms from the directory.'''
     files = find_files(directory)
     id_reg_exp = re.compile(FILE_PATTERN)
-    print("files length: {}".format(len(files)))
+    print("Using {} audio files.".format(len(files)))
     randomized_files = randomize_files(files)
     for filename in randomized_files:
         ids = id_reg_exp.findall(filename)

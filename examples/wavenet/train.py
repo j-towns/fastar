@@ -109,14 +109,12 @@ def main():
                                                 wavenet_params["scalar_input"],
                                                 wavenet_params[
                                                     "initial_filter_width"])
-    batches_fun = vctk(args.data_dir, receptive_field,
+    get_batches = vctk(args.data_dir, receptive_field,
                        args.sample_size, args.silence_threshold,
                        args.batch_size)
-    print('Made data generator')
 
-    init_batch = next(batches_fun())
-    print('Data shape: ')
-    print(init_batch.shape)
+    init_batch = next(get_batches())
+    print(f'Input batch shape: {init_batch.shape}')
 
     seq_len = init_batch.shape[1]
     output_width = seq_len - receptive_field + 1
@@ -129,8 +127,6 @@ def main():
                       wavenet_params["dilation_channels"],
                       wavenet_params["skip_channels"],
                       args.nr_mix)
-
-    print('Initialized network.')
 
     @parametrized
     def loss(batch, wavenet=wavenet):
@@ -176,7 +172,7 @@ def main():
     while not stop:
         # go through the dataset until we have reached the step count
         print('\nStarting epoch: {}'.format(epoch))
-        for batch in batches_fun():
+        for batch in get_batches():
             if step > args.num_steps:
                 stop = True
                 break
