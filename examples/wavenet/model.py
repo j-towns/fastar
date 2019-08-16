@@ -1,8 +1,56 @@
 from jax import lax, numpy as np
-from jaxnet import Sequential, parametrized, relu, sigmoid, Conv1D
+from jaxnet import Sequential, parametrized, relu, sigmoid, Conv1D, softplus, \
+    logsoftmax, logsumexp
 
-def calculate_receptive_field(filter_width, dilations, scalar_input,
-                              initial_filter_width):
+
+def discretized_mix_logistic_loss(theta, y, num_class=256, log_scale_min=-7.):
+    """
+    Discretized mixture of logistic distributions loss
+    :param theta: B x T x 3 * nr_mix
+    :param y:  B x T x 1
+    """
+    theta_shape = theta.shape
+
+    nr_mix = theta_shape[2] // 3
+
+    # unpack parameters
+    means = theta[:, :, :nr_mix]
+    log_scales = np.maximum(theta[:, :, nr_mix:2 * nr_mix], log_scale_min)
+    logit_probs = theta[:, :, nr_mix * 2:nr_mix * 3]
+
+    # B x T x 1 => B x T x nr_mix
+    y = np.broadcast_to(y, y.shape[:-1] + (nr_mix,))
+
+    centered_y = y - means
+    inv_stdv = np.exp(-log_scales)
+    plus_in = inv_stdv * (centered_y + 1. / (num_class - 1))
+    cdf_plus = sigmoid(plus_in)
+    min_in = inv_stdv * (centered_y - 1. / (num_class - 1))
+    cdf_min = sigmoid(min_in)
+
+    # log probability for edge case of 0 (before scaling):
+    log_cdf_plus = plus_in - softplus(plus_in)
+    # log probability for edge case of 255 (before scaling):
+    log_one_minus_cdf_min = - softplus(min_in)
+
+    cdf_delta = cdf_plus - cdf_min  # probability for all other cases
+    mid_in = inv_stdv * centered_y
+
+    log_pdf_mid = mid_in - log_scales - 2. * softplus(mid_in)
+
+    log_probs = np.where(
+        y < -0.999, log_cdf_plus,
+        np.where(y > 0.999, log_one_minus_cdf_min,
+                 np.where(cdf_delta > 1e-5,
+                          np.log(np.maximum(cdf_delta, 1e-12)),
+                          log_pdf_mid - np.log((num_class - 1) / 2))))
+
+    log_probs = log_probs + logsoftmax(logit_probs)
+    return -np.sum(logsumexp(log_probs, axis=-1), axis=-1)
+
+
+def calculate_receptive_field(filter_width, dilations,
+                              initial_filter_width, scalar_input=True):
     return ((filter_width - 1) * sum(dilations) + 1 +
             (initial_filter_width if scalar_input else filter_width) - 1)
 
@@ -20,9 +68,9 @@ def ResBlock(dilation_channels, residual_channels,
     def res_layer(
             inputs,
             gate=Sequential(Conv1D(dilation_channels, (filter_width,),
-                                         dilation=(dilation,)), sigmoid),
+                                   dilation=(dilation,)), sigmoid),
             filter=Sequential(Conv1D(dilation_channels, (filter_width,),
-                                           dilation=(dilation,)), np.tanh),
+                                     dilation=(dilation,)), np.tanh),
             nin=Conv1D(residual_channels, (1,), padding='SAME'),
             skip_conv=Conv1D(residual_channels, (1,), padding='SAME')):
         """

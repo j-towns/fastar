@@ -79,9 +79,9 @@ def main():
 
     receptive_field = calculate_receptive_field(wavenet_params["filter_width"],
                                                 wavenet_params["dilations"],
-                                                wavenet_params["scalar_input"],
                                                 wavenet_params[
-                                                    "initial_filter_width"])
+                                                    "initial_filter_width"],
+                                                wavenet_params["scalar_input"])
     get_batches = vctk(args.data_dir, receptive_field,
                        args.sample_size, args.silence_threshold,
                        args.batch_size)

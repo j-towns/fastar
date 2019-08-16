@@ -118,6 +118,47 @@ def logistic_mix_sample(theta, rng, log_scale_min=-7., num_class=256):
     rounded = np.where(rounded > num_class, num_class - 1, rounded)
     return rounded
 
+# TODO: this also was in mixture.py. Why? Decide which version to use:
+def sample_from_discretized_mix_logistic(y, rng_key,
+                                         log_scale_min=float(np.log(1e-14))):
+    """
+    :param y: B x T x C
+    :param rng_key: must be split to get new random numbers
+    :param log_scale_min:
+    :return: [-1, 1]
+    """
+
+    rng_key, key1 = random.split(rng_key)
+    y_shape = y.get_shape().as_list()
+
+    assert len(y_shape) == 3
+    assert y_shape[2] % 3 == 0
+    nr_mix = y_shape[2] // 3
+
+    logit_probs = y[:, :, :nr_mix]
+
+    def one_hot(x, depth, dtype=np.float32):
+        """Create a one-hot encoding of x of size k."""
+        return np.array(x[:, np.newaxis] == np.arange(depth), dtype)
+
+    sel = one_hot(
+        np.argmax(
+            logit_probs - np.log(-np.log(
+                random.uniform(rng_key, np.shape(logit_probs),
+                               minval=1e-5, maxval=1. - 1e-5))), axis=2),
+        depth=nr_mix)
+
+    means = np.sum(y[:, :, nr_mix:nr_mix * 2] * sel, axis=2)
+
+    log_scales = np.max(np.sum(y[:, :, nr_mix * 2:nr_mix * 3] * sel,
+                               axis=2), log_scale_min)
+
+    u = random.uniform(key1, np.shape(means), minval=1e-5, maxval=1. - 1e-5)
+    x = means + np.exp(log_scales) * (np.log(u) - np.log(1. - u))
+
+    x = np.min(np.max(x, -1.), 1.)
+    return x
+
 
 def save_wav(waveform, sample_rate, filename):
     librosa.output.write_wav(filename, waveform, sample_rate)

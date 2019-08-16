@@ -34,5 +34,4 @@ def test_wavenet(out_width=40):
 
 def test_calculate_receptive_field():
     assert 30 == calculate_receptive_field(
-        filter_width=5, dilations=[1, 2, 4],
-        scalar_input=True, initial_filter_width=2)
+        filter_width=5, dilations=[1, 2, 4], initial_filter_width=2)
