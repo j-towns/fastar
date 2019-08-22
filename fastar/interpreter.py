@@ -4,8 +4,8 @@ from collections import OrderedDict
 
 from IPython.display import ProgressBar
 
-from jax.api_util import flatten_fun, wraps
-from jax.tree_util import tree_flatten
+from jax.api_util import flatten_fun, wraps, flatten_fun_nokwargs
+from jax.tree_util import tree_flatten, tree_unflatten
 import jax.core as jc
 from jax.tree_util import build_tree
 from jax import tree_util
@@ -23,6 +23,9 @@ import fastar.util as util
 map = safe_map
 zip = safe_zip
 
+def get_aval(x):
+    return abstract_arrays.raise_to_shaped(jc.get_aval(x))
+
 class Env(OrderedDict): pass
 def env_to_iterable(env):
     keys = tuple(env.keys())
@@ -33,16 +36,16 @@ tree_util.register_pytree_node(Env, env_to_iterable,
 ## Core
 def make_jaxpr(f):
     def pv_like(x):
-        return pe.PartialVal((xla.abstractify(x), jc.unit))
+        return pe.PartialVal((get_aval(x), jc.unit))
 
     @wraps(f)
-    def jaxpr_maker(*args, **kwargs):
+    def jaxpr_maker(*args):
         fun = lu.wrap_init(f)
-        jax_args, in_tree = tree_util.tree_flatten((args, kwargs))
-        jaxtree_fun, out_tree = api_util.flatten_fun_nokwargs(fun, in_tree)
+        jax_args, in_tree = tree_flatten(args)
+        jaxtree_fun, out_tree = flatten_fun_nokwargs(fun, in_tree)
         pvals = map(pv_like, jax_args)
         jaxpr, _, consts = pe.trace_to_jaxpr(jaxtree_fun, pvals)
-        return jaxpr, consts
+        return jaxpr, consts, out_tree()
 
     jaxpr_maker.__name__ = "make_jaxpr({})".format(jaxpr_maker.__name__)
     return jaxpr_maker
@@ -54,8 +57,12 @@ def init_ans(prim, *args, **params):
     else:
         args = map(lambda arg: get_aval(arg[0]), args)
         abstract_out = prim.abstract_eval(*args, **params)
-        return parray(zeros_like_aval(abstract_out),
-                       util.false_mask(abstract_out))
+        if prim.multiple_results:
+            return [parray(zeros_like_aval(o), util.false_mask(o))
+                    for o in abstract_out]
+        else:
+            return parray(zeros_like_aval(abstract_out),
+                          util.false_mask(abstract_out))
 
 update_rules = {}
 def get_update(p):
@@ -90,11 +97,7 @@ def firstpass(jaxpr, consts, freevar_vals, args):
     map(write, jaxpr.invars, args)
     map(write, jaxpr.freevars, freevar_vals)
     for eqn in jaxpr.eqns:
-        if not eqn.restructure:
-            in_vals = map(read, eqn.invars)
-        else:
-            in_vals = [pack(map(read, invars)) if type(invars) is tuple
-                       else read(invars) for invars in eqn.invars]
+        in_vals = map(read, eqn.invars)
         if eqn.bound_subjaxprs:
             subjaxprs, sub_consts, sub_freevar_vals = unzip3([(
                 subjaxpr,
@@ -111,47 +114,36 @@ def firstpass(jaxpr, consts, freevar_vals, args):
         else:
             ans = init_ans(eqn.primitive, *in_vals, **eqn.params)
             ans = get_update(eqn.primitive)(ans, *in_vals, **eqn.params)
-        outvals = list(ans) if eqn.destructure else [ans]
-        map(write, eqn.outvars, outvals)
-    return read(jaxpr.outvar), (env, subenvs)
+        if eqn.primitive.multiple_results:
+            map(write, eqn.outvars, ans)
+        else:
+            write(eqn.outvars[0], ans)
+    return map(read, jaxpr.outvars), (env, subenvs)
 
 def wrap(arr, mask):
     return parray(arr, mask.mask)
 
 @lu.transformation_with_aux
-def inited_fun(jaxpr, in_tree_def, masks, mask_tree_def, args):
-    consts, freevar_vals, args = args
-    consts, freevar_vals, args = tree_util.build_tree(
-        in_tree_def, (consts, freevar_vals, args))
-    const_masks, freevar_masks, arg_masks = tree_util.build_tree(
-        mask_tree_def, masks)
-    freevar_vals = tree_util.tree_multimap(wrap, freevar_vals, freevar_masks)
-    args = tree_util.tree_multimap(wrap, args, arg_masks)
-    consts = tree_util.tree_multimap(wrap, consts, const_masks)
+def inited_fun(jaxpr, in_tree_def, masks, *args):
+    args = [parray(a, m.mask) for a, m in zip(args, masks)]
+    consts, freevar_vals, args = tree_unflatten(in_tree_def, args)
     out = yield (jaxpr, consts, freevar_vals, args), {}
     out = out[0], (out[1],)  # Tuple of envs, not singleton env
-    out, out_mask = util.tree_unmask(out)
-    out_jtuple, tree_def = ad.tree_to_jaxtuples(out)
-    yield out_jtuple, (out_mask, tree_def)
+    out, out_mask, out_treedef = util.unmask_and_flatten(out)
+    yield out, (out_mask, out_treedef)
 
 def call_init_rule(primitive, params, jaxpr, consts, freevar_vals, in_vals):
     jaxpr, = jaxpr
     consts, = consts
     freevar_vals, = freevar_vals
-    (consts, freevar_vals, in_vals), masks, mask_tree_def = (
-        util.tree_unmask_hashably((consts, freevar_vals, in_vals)))
-    (consts, freevar_vals, in_vals), in_tree_def = ad.tree_to_jaxtuples(
+    all_args, masks, in_treedef = util.unmask_and_flatten(
         (consts, freevar_vals, in_vals))
+    masks = tuple(map(util.HashableMask, masks))
     fun = lu.wrap_init(firstpass)
-    fun, out_mask_and_tree_def = inited_fun(fun, jaxpr, in_tree_def,
-                                            masks, mask_tree_def)
-    all_args = jc.pack((consts, freevar_vals, in_vals))
-    out = primitive.bind(fun, all_args, **params)
-    out_mask, out_tree_def = out_mask_and_tree_def()
-    out = tree_util.build_tree(out_tree_def, out)
-    return tree_util.tree_multimap(lambda arr, mask: parray(arr, mask),
-                                   out, out_mask)
-
+    fun, out_mask_and_treedef = inited_fun(fun, jaxpr, in_treedef, masks)
+    out = primitive.bind(fun, *all_args, **params)
+    out_mask, out_treedef = out_mask_and_treedef()
+    return tree_unflatten(out_treedef, map(parray, out, out_mask))
 init_rules[xla.xla_call_p] = partial(call_init_rule, xla.xla_call_p)
 
 def fastpass(jaxpr, freevar_vals, args, old_env):
@@ -194,13 +186,12 @@ def fastpass(jaxpr, freevar_vals, args, old_env):
     map(write, jaxpr.invars, args)
     map(write, jaxpr.freevars, freevar_vals)
     for eqn in jaxpr.eqns:
-        if not eqn.restructure:
-            in_vals = map(read, eqn.invars)
-        else:
-            in_vals = [pack(map(read, invars)) if type(invars) is tuple
-                       else read(invars) for invars in eqn.invars]
+        in_vals = map(read, eqn.invars)
         old_outvals = map(read_old, eqn.outvars)
-        old_ans = old_outvals if eqn.destructure else old_outvals[0]
+        if eqn.primitive.multiple_results:
+            old_ans = old_outvals
+        else:
+            old_ans = old_outvals[0]
         in_vals = map(read, eqn.invars)
         if eqn.bound_subjaxprs:
             subjaxprs, sub_freevar_vals = unzip2([(
@@ -213,44 +204,33 @@ def fastpass(jaxpr, freevar_vals, args, old_env):
             write_subenvs(tuple(eqn.outvars), subenvs_)
         else:
             ans = get_update(eqn.primitive)(old_ans, *in_vals, **eqn.params)
-        outvals = list(ans) if eqn.destructure else [ans]
-        map(write, eqn.outvars, outvals)
-    return read(jaxpr.outvar), (env, subenvs)
+        if eqn.primitive.multiple_results:
+            map(write, eqn.outvars, ans)
+        else:
+            write(eqn.outvars[0], ans)
+    return map(read, jaxpr.outvars), (env, subenvs)
 
 @lu.transformation_with_aux
-def updated_fun(jaxpr, in_tree_def, masks, mask_tree_def, args):
-    freevar_vals, args, env = args
-    freevar_vals, args, env = tree_util.build_tree(
-        in_tree_def, (freevar_vals, args, env))
-    freevar_masks, arg_masks, env_masks = tree_util.build_tree(
-        mask_tree_def, masks)
-    freevar_vals = tree_util.tree_multimap(wrap, freevar_vals, freevar_masks)
-    args = tree_util.tree_multimap(wrap, args, arg_masks)
-    env = tree_util.tree_multimap(wrap, env, env_masks)
+def updated_fun(jaxpr, in_treedef, masks, *args):
+    args = [parray(a, m.mask) for a, m in zip(args, masks)]
+    freevar_vals, args, env = tree_unflatten(in_treedef, args)
     out = yield (jaxpr, freevar_vals, args, env), {}
     out = out[0], (out[1],)  # Tuple of envs, not singleton env
-    out, out_mask = util.tree_unmask(out)
-    out_jtuple, tree_def = ad.tree_to_jaxtuples(out)
-    yield out_jtuple, (out_mask, tree_def)
+    out, out_mask, out_treedef = util.unmask_and_flatten(out)
+    yield out, (out_mask, out_treedef)
 
-def call_update_rule(primitive, params, jaxpr, freevar_vals, in_vals,
-                     env):
+def call_update_rule(primitive, params, jaxpr, freevar_vals, in_vals, env):
     jaxpr, = jaxpr
     freevar_vals, = freevar_vals
     env, = env
-    (freevar_vals, in_vals, env), masks, mask_tree_def =(
-        util.tree_unmask_hashably((freevar_vals, in_vals, env)))
-    (freevar_vals, in_vals, env), in_tree_def = ad.tree_to_jaxtuples(
+    all_args, masks, in_treedef = util.unmask_and_flatten(
         (freevar_vals, in_vals, env))
+    masks = tuple(map(util.HashableMask, masks))
     fun = lu.wrap_init(fastpass)
-    fun, out_mask_and_tree_def = updated_fun(
-        fun, jaxpr, in_tree_def, masks, mask_tree_def)
-    all_args = jc.pack((freevar_vals, in_vals, env))
-    out = primitive.bind(fun, all_args, **params)
-    out_mask, out_tree_def = out_mask_and_tree_def()
-    out = tree_util.build_tree(out_tree_def, out)
-    return tree_util.tree_multimap(lambda arr, mask: parray(arr, mask),
-                                   out, out_mask)
+    fun, out_mask_and_treedef = updated_fun(fun, jaxpr, in_treedef, masks)
+    out = primitive.bind(fun, *all_args, **params)
+    out_mask, out_treedef = out_mask_and_treedef()
+    return tree_unflatten(out_treedef, map(parray, out, out_mask))
 update_rules[xla.xla_call_p] = partial(call_update_rule, xla.xla_call_p)
 
 class Parray(tuple):
@@ -268,16 +248,18 @@ parray = lambda arr, mask: Parray((arr, mask))
 
 ## High level API
 def accelerate(fun):
-    def first_fun(*args, **kwargs):
-        raw_args = map(lambda arg: arg[0], args)
-        jaxpr, consts = make_jaxpr(fun)(*raw_args, **kwargs)
+    def first_fun(*args):
+        raw_args = [arr for arr, _ in args]
+        jaxpr, consts, out_tree = make_jaxpr(fun)(*raw_args)
         consts = tree_util.tree_multimap(parray, consts, util.true_mask(consts))
         args_to_numpy = lambda args: [parray(util.to_numpy(raw_arg), mask)
                                       for raw_arg, mask in args]
 
         ans, env = firstpass(jaxpr, consts, [], args_to_numpy(args))
-        def fast_fun(env, *args, **kwargs):
+        ans = tree_unflatten(out_tree, ans)
+        def fast_fun(env, *args):
             ans, env = fastpass(jaxpr, [], args_to_numpy(args), env)
+            ans = tree_unflatten(out_tree, ans)
             return ans, partial(fast_fun, env)
         return ans, partial(fast_fun, env)
     return first_fun
@@ -288,17 +270,19 @@ def print_(string):
 def accelerate_fixed_point(fp, max_iter=1000):
     def accelerated(x):
         x_size = x.size
-        jaxpr, consts = make_jaxpr(fp)(x)
-        x = tree_util.tree_multimap(parray, x, util.false_mask(x))
-        consts = tree_util.tree_multimap(parray, consts, util.true_mask(consts))
+        from IPython.terminal.debugger import set_trace; set_trace()
+        jaxpr, consts, out_tree = make_jaxpr(fp)(x)
+        x, _ = tree_flatten(x)
+        consts = map(parray, consts, util.true_mask(consts))
+        x = map(parray, x, util.false_mask(x))
         print_("Progress: 0 of {}".format(x_size))
-        x, env = firstpass(jaxpr, consts, [], (x,))
-        print_("Progress: {} of {}".format(x[1].sum(), x_size))
+        x, env = firstpass(jaxpr, consts, [], x)
+        print_("Progress: {} of {}".format(x[0][1].sum(), x_size))
         i = 0
         while not util.mask_all(x) and i < max_iter:
-            x, env = fastpass(jaxpr, [], (x,), env)
+            x, env = fastpass(jaxpr, [], x, env)
             print_("Progress: {} of {}".format(x[1].sum(), x_size))
             i = i + 1
-        x, _ = x
-        return x
+        x = [arr for arr, _ in x]
+        return tree_unflatten(out_tree, x)
     return accelerated

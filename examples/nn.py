@@ -184,15 +184,12 @@ class ApplyTrace(jc.Trace):
             return map(partial(ApplyTracer, trace, net_params), x)
         return vals, todo
 
-@lu.transformation
-def apply_transform(net_params, inputs):
+def apply_transform(fun, net_params, inputs):
     with jc.new_master(ApplyTrace) as master:
-        trace = ApplyTrace(master, jc.cur_sublevel())
-        ans = yield map(partial(ApplyTracer, trace, net_params), inputs), {}
-        out_tracer = trace.full_raise(ans)
-        out_val = out_tracer.val
-        del master, out_tracer
-    yield out_val
+        fun = apply_subtrace(fun, master, WrapHashably(net_params))
+        out_val = fun.call_wrapped(*inputs)
+        del master
+    return out_val
 
 @lu.transformation
 def apply_subtrace(master, net_params, *vals):
@@ -204,7 +201,7 @@ def apply_subtrace(master, net_params, *vals):
 
 def apply_fun(net_fun, params, *inputs):
     init_layer_counter()
-    return apply_transform(lu.wrap_init(net_fun), params).call_wrapped(inputs)
+    return apply_transform(lu.wrap_init(net_fun), params, inputs)
 
 
 # Layers. Layers use weight-norm.

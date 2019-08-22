@@ -92,17 +92,14 @@ for op in nops:
 # Logit and expit use custom_transforms so their primitives have a different
 # form.
 @curry
-def logexpit_update(op, ans, consts, jax_kwargs, x, **params):
-    consts, consts_mask = consts
-    jax_kwargs, jax_kwargs_mask = jax_kwargs
+def logexpit_update(op, ans, x, **params):
     x, x_mask = x
-    ans, ans_mask = ans
+    (ans, ans_mask), = ans
     slices = util.mask_to_slices(x_mask &~ ans_mask)
     for s in slices:
         part_x = x[_unbroadcast_slice(s, np.shape(x))]
-        ans = index_update(ans, s,
-                           op.bind(consts, jax_kwargs, part_x, **params))
-    return fa.Parray((ans, x_mask))
+        ans = index_update(ans, s, op.bind(part_x, **params)[0])
+    return [fa.Parray((ans, x_mask))]
 
 for op in [special.expit.prim, special.logit.prim]:
     fa.update_rules[op] = logexpit_update(op)

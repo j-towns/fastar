@@ -1,8 +1,7 @@
 import numpy as np
 
 from jax.interpreters.xla import abstractify
-from jax.util import safe_map
-from jax.util import safe_zip
+from jax.util import safe_map, safe_zip, unzip2
 from jax import tree_util
 
 map = safe_map
@@ -31,15 +30,9 @@ def mask_all(parray):
     else:
         return np.all(mask)
 
-def tree_unmask(tree):
-    arrs = tree_util.tree_map(lambda arr: arr[0], tree)
-    masks = tree_util.tree_map(lambda arr: arr[1], tree)
-    return arrs, masks
-
-def tree_unmask_hashably(tree):
-    arrs, masks = tree_unmask(tree)
-    masks = tree_util.tree_map(HashableMask, masks)
-    masks, treedef = tree_util.process_pytree(tuple, masks)
+def unmask_and_flatten(tree):
+    parrays, treedef = tree_util.tree_flatten(tree)
+    arrs, masks = unzip2(parrays)
     return arrs, masks, treedef
 
 class HashableMask(object):
