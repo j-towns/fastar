@@ -25,13 +25,10 @@ map = safe_map
 # Jaxnet core
 
 def merge_params(params):
-    if len(params) > 0:
-        p = params[0]
-        for param in params[1:]:
-            p.update(param)
-        return p
-    else:
-        return {}
+    for p in params:
+        if p:
+            return p
+    return {}
 
 # Crude way to auto-generate unique layer names
 layer_counter = [itertools.count()]
@@ -176,6 +173,10 @@ class ApplyTrace(jc.Trace):
         f = apply_subtrace(f, self.master, WrapHashably(net_params))
         val_out = call_primitive.bind(f, *vals_in, **params)
         return ApplyTracer(self, net_params, val_out)
+
+    def pack(self, tracers):
+        vals_in, net_params = unzip2((t.val, t.net_params) for t in tracers)
+        return ApplyTracer(self, merge_params(net_params), jc.pack(vals_in))
 
 @lu.transformation
 def apply_transform(net_params, inputs):
@@ -372,17 +373,20 @@ def conditional_params_to_logprob(x, conditional_params):
     return np.sum(logsumexp(log_mix_coeffs + all_logprobs, axis=0))
 
 def _gumbel_max(rng, logit_probs):
-    return np.argmax(random.gumbel(rng, logit_probs.shape, logit_probs.dtype)
-                     + logit_probs, axis=0)
+    nr_mix, _, _ = logit_probs.shape
+    idxs = np.argmax(random.gumbel(rng, logit_probs.shape, logit_probs.dtype) +
+                     logit_probs, axis=0)
+    return np.moveaxis(idxs[..., np.newaxis] == np.arange(nr_mix),
+                       -1, 0)
 
 def conditional_params_to_sample(rng, conditional_params):
     means, inv_scales, logit_probs = conditional_params
-    _, h, w, c = means.shape
+    nr_mix, h, w, c = means.shape
     rng_mix, rng_logistic = random.split(rng)
-    mix_idx = np.broadcast_to(_gumbel_max(
-        rng_mix, logit_probs)[..., np.newaxis], (h, w, c))[np.newaxis]
-    means      = np.take_along_axis(means,      mix_idx, 0)[0]
-    inv_scales = np.take_along_axis(inv_scales, mix_idx, 0)[0]
+    mix_indicator = np.broadcast_to(_gumbel_max(
+        rng_mix, logit_probs)[..., np.newaxis], (nr_mix, h, w, c))
+    means      = np.sum(means      * mix_indicator, 0)
+    inv_scales = np.sum(inv_scales * mix_indicator, 0)
     return (means + random.logistic(rng_logistic, means.shape, means.dtype)
             / inv_scales)
 

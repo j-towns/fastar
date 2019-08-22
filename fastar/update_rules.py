@@ -4,12 +4,13 @@ import jax.lax as lax
 from jax.ops import index_update
 import jax.numpy as np
 from jax.interpreters.batching import get_aval
+from jax.interpreters import xla
 import jax.scipy.special as special
 import numpy as onp
 from jax import vjp
 from jax.abstract_arrays import make_shaped_array
 from jax.ad_util import zeros_like_aval
-from jax.util import curry, safe_zip, safe_map, unzip2
+from jax.util import curry, safe_zip, safe_map, unzip2, WrapHashably
 
 import fastar.util as util
 from . import interpreter as fa
@@ -71,6 +72,7 @@ nops = [
     lax.gt_p,
     lax.le_p,
     lax.log_p,
+    lax.log1p_p,
     lax.lt_p,
     lax.max_p,
     lax.min_p,
@@ -116,17 +118,53 @@ def cheap_op_update(op, old_out, *args, **params):
                       onp.bool_(op.bind(*args_mask, **params))))
 
 cheap_ops = [
+    lax.broadcast_p,
+    lax.broadcast_in_dim_p,
     lax.concatenate_p,
     lax.convert_element_type_p,
     lax.reshape_p,
     lax.rev_p,
     lax.slice_p,
+    lax.tie_in_p,
     lax.transpose_p,
 ]
 
 for op in cheap_ops:
     fa.update_rules[op] = cheap_op_update(op)
 
+def gather_update(
+        old_out, operand, start_indices, dimension_numbers, slice_sizes,
+        **params):
+    # Treat gather as a cheap op, but need to handle start_indices correctly
+    operand, operand_mask = operand
+    start_indices, start_indices_mask = start_indices
+    assert onp.all(start_indices_mask)
+    # Treat gather as a cheap op
+    return fa.parray(
+        lax.gather_p.bind(
+            operand, start_indices, dimension_numbers=dimension_numbers,
+            slice_sizes=slice_sizes, **params),
+        onp.asarray(lax.gather_p.bind(
+            operand_mask, start_indices, dimension_numbers=dimension_numbers,
+            slice_sizes=slice_sizes, **params)))
+fa.update_rules[lax.gather_p] = gather_update
+
+def gather_static_update(
+        old_out, operand, start_indices, start_indices_shape, dimension_numbers,
+        slice_sizes, **params):
+    # Treat gather as a cheap op, but need to handle start_indices correctly
+    operand, operand_mask = operand
+    start_indices = onp.reshape(onp.array(start_indices, dtype=int),
+                                start_indices_shape)
+    # Treat gather as a cheap op
+    return fa.parray(
+        lax.gather_p.bind(
+            operand, start_indices, dimension_numbers=dimension_numbers,
+            slice_sizes=slice_sizes, **params),
+        onp.asarray(lax.gather_p.bind(
+            operand_mask, start_indices, dimension_numbers=dimension_numbers,
+            slice_sizes=slice_sizes, **params)))
+fa.update_rules[lax.gather_static_p] = gather_static_update
 
 # Reductions
 @curry
@@ -404,3 +442,8 @@ def conv_general_dilated_update(old_out, lhs, rhs, window_strides, padding,
 
 
 fa.update_rules[lax.conv_general_dilated_p] = conv_general_dilated_update
+
+def device_put_update(old_out, x, device_num=0):
+    x, mask = util.tree_unmask(x)
+    return fa.parray(xla.device_put_p.bind(x, device_num=device_num), mask)
+fa.update_rules[xla.device_put_p] = device_put_update
