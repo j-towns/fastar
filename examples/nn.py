@@ -9,11 +9,12 @@ import jax.numpy as np
 import jax.linear_util as lu
 from jax.util import unzip2, unzip3, safe_zip, safe_map, partial, WrapHashably
 from jax.abstract_arrays import ShapedArray
+from jax import tree_util
+from jax import api_util
 from jax.experimental import stax
 from jax.interpreters import partial_eval as pe
 from jax.interpreters import batching
 from jax.interpreters import xla
-from jax.interpreters.batching import get_aval
 import jax.core as jc
 from jax import random, lax, vmap, custom_transforms
 from jax.scipy.special import expit, logsumexp
@@ -41,6 +42,7 @@ class Layer(jc.Primitive):
     def __init__(self, name, init_fun, apply_fun, append_id=True):
         self.init_fun = init_fun
         self.apply_fun = apply_fun
+        self.multiple_results = True
         name = name + '_' + str(layer_count()) if append_id else name
         super(Layer, self).__init__(name)
         def layer_abstract_eval(*avals):
@@ -55,10 +57,10 @@ class Layer(jc.Primitive):
             batched_apply_fun = (
                 lambda params, *batch_inputs:
                 batching.batch(lu.wrap_init(partial(self.apply_fun, params)),
-                               batch_inputs, batch_dims, 0))
+                               batch_inputs, batch_dims, lambda: (0,)))
             # Assume init_fun is written to handle batched example inputs
             batched_layer = Layer(name, init_fun, batched_apply_fun, False)
-            return batched_layer.bind(*batched_args, **params), 0
+            return batched_layer.bind(*batched_args, **params), (0,)
         batching.primitive_batchers[self] = layer_batch
 
 def init_interpreter(rng, jaxpr, consts, freevar_vals, net_params, *args):
@@ -73,16 +75,12 @@ def init_interpreter(rng, jaxpr, consts, freevar_vals, net_params, *args):
 
     env = {}
     write(jc.unitvar, jc.unit)
-    jc.pat_fmap(write, jaxpr.constvars, consts)
-    jc.pat_fmap(write, jaxpr.invars, args)
-    jc.pat_fmap(write, jaxpr.freevars, freevar_vals)
+    map(write, jaxpr.constvars, consts)
+    map(write, jaxpr.invars, args)
+    map(write, jaxpr.freevars, freevar_vals)
     for eqn in jaxpr.eqns:
         rng, prim_rng = random.split(rng)
-        if not eqn.restructure:
-            in_vals = map(read, eqn.invars)
-        else:
-            in_vals = [jc.pack(map(read, invars)) if type(invars) is tuple
-                       else read(invars) for invars in eqn.invars]
+        in_vals = map(read, eqn.invars)
         # Assume no Layers in subjaxprs
         subfuns = [partial(jc.eval_jaxpr, subjaxpr, map(read, const_bindings),
                                                     map(read, freevar_bindings))
@@ -91,8 +89,10 @@ def init_interpreter(rng, jaxpr, consts, freevar_vals, net_params, *args):
         subfuns = map(lu.wrap_init, subfuns)
         ans, net_params = get_primitive_init(eqn.primitive)(
             prim_rng, net_params, *(subfuns + in_vals), **eqn.params)
-        outvals = list(ans) if eqn.destructure else [ans]
-        map(write, eqn.outvars, outvals)
+        if eqn.primitive.multiple_results:
+          map(write, eqn.outvars, ans)
+        else:
+          write(eqn.outvars[0], ans)
     return net_params
 
 init_rules = {}
@@ -117,13 +117,15 @@ def call_init(primitive, rng, net_params, f, *in_vals, **params):
 
 init_rules[xla.xla_call_p] = partial(call_init, xla.xla_call_p)
 
-def init_fun(net_fun, rng, *example_inputs, **kwargs):
+def init_fun(net_fun, rng, *example_inputs):
     init_layer_counter()
     net_fun = lu.wrap_init(net_fun)
+    jax_args, in_tree = tree_util.tree_flatten(example_inputs)
+    net_fun, out_tree = api_util.flatten_fun_nokwargs(net_fun, in_tree)
     def pv_like(x):
-        return pe.PartialVal((get_aval(x), jc.unit))
-    pvals = map(pv_like, example_inputs)
-    jaxpr, _, consts = pe.trace_to_jaxpr(net_fun, pvals, **kwargs)
+        return pe.PartialVal((xla.abstractify(x), jc.unit))
+    pvals = map(pv_like, jax_args)
+    jaxpr, _, consts = pe.trace_to_jaxpr(net_fun, pvals)
     return init_interpreter(rng, jaxpr, consts, [], {}, *example_inputs)
 
 
@@ -138,9 +140,6 @@ class ApplyTracer(jc.Tracer):
     @property
     def aval(self):
         return jc.get_aval(self.val)
-
-    def unpack(self):
-        return tuple(self.val)
 
     def full_lower(self):
         return self
@@ -161,22 +160,29 @@ class ApplyTrace(jc.Trace):
         if isinstance(primitive, Layer):
             apply_fun = primitive.apply_fun
             layer_params = net_params[primitive.name]
-            return ApplyTracer(
-                self, net_params, apply_fun(layer_params, *vals_in))
+            out = apply_fun(layer_params, *vals_in)
         else:
-            return ApplyTracer(
-                self, net_params, primitive.bind(*vals_in, **params))
+            out = primitive.bind(*vals_in, **params)
+        if primitive.multiple_results:
+            return map(partial(ApplyTracer, self, net_params), out)
+        else:
+            return ApplyTracer(self, net_params, out)
 
     def process_call(self, call_primitive, f, tracers, params):
-        vals_in, net_params = unzip2((t.val, t.net_params) for t in tracers)
+        vals, net_params = unzip2((t.val, t.net_params) for t in tracers)
         net_params = merge_params(net_params)
         f = apply_subtrace(f, self.master, WrapHashably(net_params))
-        val_out = call_primitive.bind(f, *vals_in, **params)
-        return ApplyTracer(self, net_params, val_out)
+        vals_out = call_primitive.bind(f, *vals, **params)
+        return map(partial(ApplyTracer, self, net_params), vals_out)
 
-    def pack(self, tracers):
-        vals_in, net_params = unzip2((t.val, t.net_params) for t in tracers)
-        return ApplyTracer(self, merge_params(net_params), jc.pack(vals_in))
+    def post_process_call(self, call_primitive, out_tracers, params):
+        vals, net_params = unzip2((t.val, t.net_params) for t in out_tracers)
+        net_params = merge_params(net_params)
+        master = self.master
+        def todo(x):
+            trace = ApplyTrace(master, jc.cur_sublevel())
+            return map(partial(ApplyTracer, trace, net_params), x)
+        return vals, todo
 
 @lu.transformation
 def apply_transform(net_params, inputs):
@@ -211,15 +217,15 @@ def Dense(out_dim, init_scale=1.):
         V = 0.05 * random.normal(rng, (out_dim, in_dim))
         g = np.ones(out_dim)
         b = np.zeros(out_dim)
-        example_output = vmap(apply_fun, (None, 0))((V, g, b), example_input)
+        example_output, = vmap(apply_fun, (None, 0))((V, g, b), example_input)
 
         g = init_scale / np.sqrt(np.var(example_output, 0) + 1e-10)
         b = np.mean(example_output, 0) * g
         return V, g, b
     def apply_fun(params, inputs):
         V, g, b = params
-        return g * np.dot(_l2_normalize(V, 1), inputs) - b
-    return Layer('DenseLayer', init_fun, apply_fun).bind
+        return g * np.dot(_l2_normalize(V, 1), inputs) - b,
+    return lambda *args: Layer('DenseLayer', init_fun, apply_fun).bind(*args)[0]
 
 def _conv_init_fun(
         apply_fun, rng, inputs, out_chan, filter_shape, init_scale):
@@ -227,7 +233,7 @@ def _conv_init_fun(
                              + (inputs.shape[-1], out_chan))
     g = np.ones(out_chan)
     b = np.zeros(out_chan)
-    example_output = vmap(apply_fun, (None, 0))((V, g, b), inputs)
+    example_output, = vmap(apply_fun, (None, 0))((V, g, b), inputs)
 
     g = init_scale / np.sqrt(np.var(example_output, (0, 1, 2)))
     return V, g, np.mean(example_output, (0, 1, 2)) * g
@@ -247,8 +253,8 @@ def Conv(out_chan, filter_shape=(3, 3), strides=None, padding='SAME',
     def apply_fun(params, inputs):
         V, g, b = params
         W = g * _l2_normalize(V, (0, 1, 2))
-        return _unbatch(_conv, inputs, W, strides, padding) - b
-    return Layer('ConvLayer', init_fun, apply_fun).bind
+        return _unbatch(_conv, inputs, W, strides, padding) - b,
+    return lambda *args: Layer('ConvLayer', init_fun, apply_fun).bind(*args)[0]
 
 def ConvTranspose(out_chan, filter_shape=[3, 3], strides=None, padding='SAME',
                   init_scale=1.):
@@ -259,8 +265,9 @@ def ConvTranspose(out_chan, filter_shape=[3, 3], strides=None, padding='SAME',
     def apply_fun(params, inputs):
         V, g, b = params
         W = g * _l2_normalize(V, (1, 2, 3))
-        return _unbatch(lax.conv_transpose, inputs, W, strides, padding) - b
-    return Layer('ConvTransposeLayer', init_fun, apply_fun).bind
+        return _unbatch(lax.conv_transpose, inputs, W, strides, padding) - b,
+    return (lambda *args:
+            Layer('ConvTransposeLayer', init_fun, apply_fun).bind(*args)[0])
 
 def NIN(out_chan):
     return Conv(out_chan, [1, 1])

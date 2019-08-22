@@ -15,8 +15,8 @@ def Layer(name):
         return W, b
     def apply_fun(params, inputs):
         W, b = params
-        return np.dot(W, inputs) + b
-    return core.Layer(name, init_fun, apply_fun).bind
+        return np.dot(W, inputs) + b,
+    return lambda *args: core.Layer(name, init_fun, apply_fun).bind(*args)[0]
 
 layer = Layer("Test layer")
 

@@ -3,7 +3,6 @@ from operator import and_
 import jax.lax as lax
 from jax.ops import index_update
 import jax.numpy as np
-from jax.interpreters.batching import get_aval
 from jax.interpreters import xla
 import jax.scipy.special as special
 import numpy as onp

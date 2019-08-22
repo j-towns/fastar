@@ -4,14 +4,13 @@ from collections import OrderedDict
 
 from IPython.display import ProgressBar
 
-from jax.api_util import (pytree_fun_to_jaxtupletree_fun,
-                          pytree_to_jaxtupletree, wraps)
+from jax.api_util import flatten_fun, wraps
+from jax.tree_util import tree_flatten
 import jax.core as jc
 from jax.tree_util import build_tree
 from jax import tree_util
 import jax.interpreters.xla as xla
 import jax.interpreters.ad as ad
-from jax.interpreters.batching import get_aval
 from jax.ad_util import zeros_like_aval
 import jax.interpreters.partial_eval as pe
 import jax.linear_util as lu
@@ -34,16 +33,15 @@ tree_util.register_pytree_node(Env, env_to_iterable,
 ## Core
 def make_jaxpr(f):
     def pv_like(x):
-        aval = get_aval(x)
-        return pe.PartialVal((aval, jc.unit))
+        return pe.PartialVal((xla.abstractify(x), jc.unit))
 
     @wraps(f)
     def jaxpr_maker(*args, **kwargs):
         fun = lu.wrap_init(f)
-        jax_args, in_trees = unzip2(map(pytree_to_jaxtupletree, args))
-        jaxtree_fun, out_tree = pytree_fun_to_jaxtupletree_fun(fun, in_trees)
+        jax_args, in_tree = tree_util.tree_flatten((args, kwargs))
+        jaxtree_fun, out_tree = api_util.flatten_fun_nokwargs(fun, in_tree)
         pvals = map(pv_like, jax_args)
-        jaxpr, _, consts = pe.trace_to_jaxpr(jaxtree_fun, pvals, **kwargs)
+        jaxpr, _, consts = pe.trace_to_jaxpr(jaxtree_fun, pvals)
         return jaxpr, consts
 
     jaxpr_maker.__name__ = "make_jaxpr({})".format(jaxpr_maker.__name__)
