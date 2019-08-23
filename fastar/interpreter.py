@@ -270,7 +270,6 @@ def print_(string):
 def accelerate_fixed_point(fp, max_iter=1000):
     def accelerated(x):
         x_size = x.size
-        from IPython.terminal.debugger import set_trace; set_trace()
         jaxpr, consts, out_tree = make_jaxpr(fp)(x)
         x, _ = tree_flatten(x)
         consts = map(parray, consts, util.true_mask(consts))
@@ -279,9 +278,9 @@ def accelerate_fixed_point(fp, max_iter=1000):
         x, env = firstpass(jaxpr, consts, [], x)
         print_("Progress: {} of {}".format(x[0][1].sum(), x_size))
         i = 0
-        while not util.mask_all(x) and i < max_iter:
+        while not util.mask_all(x[0]) and i < max_iter:
             x, env = fastpass(jaxpr, [], x, env)
-            print_("Progress: {} of {}".format(x[1].sum(), x_size))
+            print_("Progress: {} of {}".format(x[0][1].sum(), x_size))
             i = i + 1
         x = [arr for arr, _ in x]
         return tree_unflatten(out_tree, x)

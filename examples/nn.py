@@ -195,13 +195,20 @@ def apply_transform(fun, net_params, inputs):
 def apply_subtrace(master, net_params, *vals):
     net_params = net_params.val
     trace = ApplyTrace(master, jc.cur_sublevel())
-    ans = yield map(partial(ApplyTracer, trace, net_params), vals), {}
-    out_tracer = trace.full_raise(ans)
-    yield out_tracer.val
+    outs = yield map(partial(ApplyTracer, trace, net_params), vals), {}
+    out_tracers = map(trace.full_raise, outs)
+    yield [t.val for t in out_tracers]
 
-def apply_fun(net_fun, params, *inputs):
+def apply_fun(net_fun, net_params, *inputs):
     init_layer_counter()
-    return apply_transform(lu.wrap_init(net_fun), params, inputs)
+    inputs_flat, in_tree  = tree_util.tree_flatten(inputs)
+    net_fun = lu.wrap_init(net_fun)
+    net_fun, out_tree = api_util.flatten_fun_nokwargs(net_fun, in_tree)
+    with jc.new_master(ApplyTrace) as master:
+        net_fun = apply_subtrace(net_fun, master, WrapHashably(net_params))
+        out_flat = net_fun.call_wrapped(*inputs)
+        del master
+    return tree_util.tree_unflatten(out_tree(), out_flat)
 
 
 # Layers. Layers use weight-norm.
