@@ -1,4 +1,7 @@
+# Run this example in your browser: https://colab.research.google.com/drive/111cKRfwYX4YFuPH3FF4V46XLfsPG1icZ#scrollTo=i7tMOevVHCXz
+
 from jax import lax, numpy as np
+
 from jaxnet import Sequential, parametrized, relu, sigmoid, Conv1D, softplus, \
     logsoftmax, logsumexp
 
@@ -62,17 +65,10 @@ def skip_slice(inputs, output_width):
     return lax.dynamic_slice(inputs, (0, skip_cut, 0), slice_sizes)
 
 
-def ResBlock(dilation_channels, residual_channels,
-             filter_width, dilation, output_width):
+def ResLayer(dilation_channels, residual_channels, filter_width, dilation,
+             output_width):
     @parametrized
-    def res_layer(
-            inputs,
-            gate=Sequential(Conv1D(dilation_channels, (filter_width,),
-                                   dilation=(dilation,)), sigmoid),
-            filter=Sequential(Conv1D(dilation_channels, (filter_width,),
-                                     dilation=(dilation,)), np.tanh),
-            nin=Conv1D(residual_channels, (1,), padding='SAME'),
-            skip_conv=Conv1D(residual_channels, (1,), padding='SAME')):
+    def res_layer(inputs):
         """
         From original doc string:
 
@@ -88,24 +84,22 @@ def ResBlock(dilation_channels, residual_channels,
         Where `[gate]` and `[filter]` are causal convolutions with a
         non-linear activation at the output
         """
-        p = gate(inputs) * filter(inputs)
-        out = nin(p)
+        gated = Sequential(Conv1D(dilation_channels, (filter_width,),
+                                  dilation=(dilation,)), sigmoid)(inputs)
+        filtered = Sequential(Conv1D(dilation_channels, (filter_width,),
+                                     dilation=(dilation,)), np.tanh)(inputs)
+        p = gated * filtered
+        out = Conv1D(residual_channels, (1,), padding='SAME')(p)
         # Add the transformed output of the resblock to the sliced input:
         sliced_inputs = lax.dynamic_slice(
             inputs, [0, inputs.shape[1] - out.shape[1], 0],
             [inputs.shape[0], out.shape[1], inputs.shape[2]])
-        return (sum(out, sliced_inputs),
-                skip_conv(skip_slice(inputs, output_width)))
+        new_out = sum(out, sliced_inputs)
+        skip = Conv1D(residual_channels, (1,), padding='SAME')(
+            skip_slice(inputs, output_width))
+        return new_out, skip
 
-    @parametrized
-    def res_block(input, res_layer=res_layer):
-        """Wrap the layer such that we add the contributions from the skip out
-           and pass to the next layer along with the so called hidden state"""
-        hidden, out = input
-        hidden, out_partial = res_layer(hidden)
-        return hidden, out + out_partial
-
-    return res_block
+    return res_layer
 
 
 def Wavenet(dilations, filter_width, initial_filter_width, out_width,
@@ -120,17 +114,16 @@ def Wavenet(dilations, filter_width, initial_filter_width, out_width,
     """
 
     @parametrized
-    def wavenet(inputs,
-                pre=Conv1D(residual_channels, (initial_filter_width,)),
-                net=Sequential(*(ResBlock(dilation_channels, residual_channels,
-                                          filter_width, dilation, out_width)
-                                 for dilation in dilations)),
-                post=Sequential(relu, Conv1D(skip_channels, (1,)),
-                                relu, Conv1D(3 * nr_mix, (1,)))):
-        inputs = pre(inputs)
-        initial = np.zeros((inputs.shape[0], out_width, residual_channels),
-                           'float32')
-        _, out = net((inputs, initial))
-        return post(out)
+    def wavenet(inputs):
+        hidden = Conv1D(residual_channels, (initial_filter_width,))(inputs)
+        out = np.zeros((hidden.shape[0], out_width, residual_channels),
+                       'float32')
+        for dilation in dilations:
+            res = ResLayer(dilation_channels, residual_channels,
+                           filter_width, dilation, out_width)(hidden)
+            hidden, out_partial = res
+            out += out_partial
+        return Sequential(relu, Conv1D(skip_channels, (1,)),
+                          relu, Conv1D(3 * nr_mix, (1,)))(out)
 
     return wavenet

@@ -5,11 +5,10 @@ from pathlib import Path
 
 import numpy as onp
 from audio_reader import vctk
-from jax import jit, value_and_grad, np, random
-from jax.experimental import optimizers
-from jaxnet import parametrized, save_params, load_params
-from mixture import discretized_mix_logistic_loss
-from model import Wavenet, calculate_receptive_field
+from jax import np, random
+from jaxnet import parametrized, save_params, load_params, L2Regularized, optimizers
+from model import Wavenet, calculate_receptive_field, \
+    discretized_mix_logistic_loss
 
 # defaults
 BATCH_SIZE = 1
@@ -100,8 +99,7 @@ def main():
                       args.nr_mix)
 
     @parametrized
-    def loss(batch, wavenet=wavenet):
-        # TODO: add L2 regularisation
+    def loss(batch):
         theta = wavenet(batch)[:, :-1, :]
         # now slice the padding off the batch
         sliced_batch = batch[:, receptive_field:, :]
@@ -109,25 +107,19 @@ def main():
             theta, sliced_batch, num_class=1 << 16), axis=0)
                 * np.log2(np.e) / (output_width - 1))
 
+    loss = L2Regularized(loss, .0)
+
     rng = random.PRNGKey(args.seed)
-    opt_init, opt_update, get_params = optimizers.adam(
-        optimizers.exponential_decay(
-            step_size=args.learning_rate, decay_steps=1,
-            decay_rate=args.lr_decay))
+    opt = optimizers.Adam(optimizers.exponential_decay(
+        args.learning_rate, decay_steps=1, decay_rate=args.lr_decay))
 
     model_dir = Path(args.model_dir)
     if args.restore_file:
-        opt_state = load_params(model_dir / args.restore_file)
+        state = load_params(model_dir / args.restore_file)
         print('Restored parameters.')
     else:
-        opt_state = opt_init(loss.init_params(rng, init_batch))
+        state = opt.init_state(loss.init_params(rng, init_batch))
         print('Initialized parameters.')
-
-    @jit
-    def update(i, opt_state, batch):
-        params = get_params(opt_state)
-        train_loss, gradient = value_and_grad(loss)(params, batch)
-        return opt_update(i, gradient, opt_state), train_loss
 
     def save_and_print(i, ls, params):
         print('Saving...')
@@ -147,15 +139,16 @@ def main():
             if step > args.num_steps:
                 stop = True
                 break
-            opt_state, t_loss = update(step, opt_state, batch)
+            state, t_loss = opt.optimize(loss.apply, state, batch,
+                                         jit=True, return_loss=True)
             losses.append(t_loss)
             print('Iteration: {}, loss: {:.2f}'.format(step, t_loss))
 
             if step % args.checkpoint_every == 0 and step > 0:
-                save_and_print(step, losses, get_params(opt_state))
+                save_and_print(step, losses, opt.get_parameters(state))
             step += 1
         epoch += 1
-    save_and_print(step, np.array(losses), get_params(opt_state))
+    save_and_print(step, np.array(losses), opt.get_parameters(state))
 
 
 if __name__ == '__main__':
