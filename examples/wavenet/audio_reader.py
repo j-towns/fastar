@@ -2,6 +2,8 @@ import fnmatch
 import os
 import random
 import re
+import shutil
+import urllib
 import zipfile
 from pathlib import Path
 
@@ -129,8 +131,8 @@ def vctk(data_dir, receptive_field, sample_size,
     corpus_name = 'VCTK-Corpus'
     if not corpus_name in os.listdir(str(data_dir)):
         print(f'Dowloading {corpus_name} (~10GB zip)...')
-        # with urllib.request.urlopen(url) as response, zip_file.open('wb') as out_file:
-        #    shutil.copyfileobj(response, out_file)
+        with urllib.request.urlopen(url) as response, zip_file.open('wb') as out_file:
+            shutil.copyfileobj(response, out_file)
         with zipfile.ZipFile(str(zip_file)) as f:
             f.extractall(str(data_dir))
     return audio_loader(str(data_dir / corpus_name / 'wav48'),
