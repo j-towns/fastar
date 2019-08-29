@@ -118,7 +118,7 @@ def main():
         state = load_params(model_dir / args.restore_file)
         print('Restored parameters.')
     else:
-        state = opt.init_state(loss.init_params(rng, init_batch))
+        state = opt.init_state(loss.init_parameters(rng, init_batch))
         print('Initialized parameters.')
 
     def save_and_print(i, ls, params):
