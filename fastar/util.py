@@ -8,27 +8,14 @@ map = safe_map
 zip = safe_zip
 
 def true_mask(val):
-    if isinstance(val, tuple):
-        return tuple(true_mask(v) for v in val)
-    elif np.isscalar(val):
-        return np.array(True)
-    else:
-        return np.full(np.shape(val), True, dtype=bool)
+    return np.full(np.shape(val), True, dtype=bool)
 
 def false_mask(val):
-    if isinstance(val, tuple):
-        return tuple(false_mask(v) for v in val)
-    elif np.isscalar(val):
-        return np.array(False)
-    else:
-        return np.full(np.shape(val), False, dtype=bool)
+    return np.full(np.shape(val), False, dtype=bool)
 
 def mask_all(parray):
     _, mask = parray
-    if isinstance(mask, tuple):
-        return all(mask_all(m) for m in mask)
-    else:
-        return np.all(mask)
+    return np.all(mask)
 
 def unmask_and_flatten(tree):
     parrays, treedef = tree_util.tree_flatten(tree)
@@ -54,8 +41,6 @@ def _to_tree(idxs):
         for i in idx:
             branch = branch.setdefault(i, {})
     return tree
-
-_srange = lambda *args: set(range(*args))
 
 def _contains_rectangle(idx_tree, rectangle):
     """
@@ -111,9 +96,6 @@ def mask_to_slices(mask):
         rectangles.append(rect)
         idx_tree = _remove_rectangle(idx_tree, rect)
     return [tuple(slice(s, e) for s, e in rect) for rect in rectangles]
-
-def to_tuple_tree(arr):
-    return tuple(map(to_tuple_tree, arr) if np.ndim(arr) > 1 else arr)
 
 def to_numpy(x):
     if isinstance(x, float):

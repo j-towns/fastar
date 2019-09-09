@@ -19,6 +19,7 @@ from jax import abstract_arrays
 from jax import eval_shape
 
 import fastar.util as util
+from fastar.util import true_mask, false_mask
 
 map = safe_map
 zip = safe_zip
@@ -34,22 +35,6 @@ tree_util.register_pytree_node(Env, env_to_iterable,
                                lambda keys, xs: Env(zip(keys, xs)))
 
 ## Core
-def make_jaxpr(f):
-    def pv_like(x):
-        return pe.PartialVal((get_aval(x), jc.unit))
-
-    @wraps(f)
-    def jaxpr_maker(*args):
-        fun = lu.wrap_init(f)
-        jax_args, in_tree = tree_flatten(args)
-        jaxtree_fun, out_tree = flatten_fun_nokwargs(fun, in_tree)
-        pvals = map(pv_like, jax_args)
-        jaxpr, _, consts = pe.trace_to_jaxpr(jaxtree_fun, pvals)
-        return jaxpr, consts, out_tree()
-
-    jaxpr_maker.__name__ = "make_jaxpr({})".format(jaxpr_maker.__name__)
-    return jaxpr_maker
-
 init_rules = {}
 def init_ans(prim, *args, **params):
     if prim in init_rules:
@@ -58,11 +43,11 @@ def init_ans(prim, *args, **params):
         args = map(lambda arg: get_aval(arg[0]), args)
         abstract_out = prim.abstract_eval(*args, **params)
         if prim.multiple_results:
-            return [parray(zeros_like_aval(o), util.false_mask(o))
+            return [parray(zeros_like_aval(o), false_mask(o))
                     for o in abstract_out]
         else:
             return parray(zeros_like_aval(abstract_out),
-                          util.false_mask(abstract_out))
+                          false_mask(abstract_out))
 
 update_rules = {}
 def get_update(p):
@@ -76,7 +61,7 @@ def get_update(p):
 def firstpass(jaxpr, consts, freevar_vals, args):
     def read(v):
         if type(v) is jc.Literal:
-            return parray(v.val, util.true_mask(v.val))
+            return parray(v.val, true_mask(v.val))
         else:
             val = env[v]
             assert isinstance(val, Parray)
@@ -92,7 +77,7 @@ def firstpass(jaxpr, consts, freevar_vals, args):
     env = Env()
     subenvs = Env()
 
-    write(jc.unitvar, parray(jc.unit, util.true_mask(jc.unit)))
+    write(jc.unitvar, parray(jc.unit, true_mask(jc.unit)))
     map(write, jaxpr.constvars, consts)
     map(write, jaxpr.invars, args)
     map(write, jaxpr.freevars, freevar_vals)
@@ -151,7 +136,7 @@ def fastpass(jaxpr, freevar_vals, args, old_env):
 
     def read(v):
         if type(v) is jc.Literal:
-            return parray(v.val, util.true_mask(v.val))
+            return parray(v.val, true_mask(v.val))
         else:
             val = env[v]
             assert isinstance(val, Parray)
@@ -159,7 +144,7 @@ def fastpass(jaxpr, freevar_vals, args, old_env):
 
     def read_old(v):
         if type(v) is jc.Literal:
-            return parray(v.val, util.true_mask(v.val))
+            return parray(v.val, true_mask(v.val))
         else:
             val = old_env[v]
             assert isinstance(val, Parray)
@@ -181,7 +166,7 @@ def fastpass(jaxpr, freevar_vals, args, old_env):
     env = Env()
     subenvs = Env()
 
-    write(jc.unitvar, parray(jc.unit, util.true_mask(jc.unit)))
+    write(jc.unitvar, parray(jc.unit, true_mask(jc.unit)))
     map(copy_old_to_new, jaxpr.constvars)
     map(write, jaxpr.invars, args)
     map(write, jaxpr.freevars, freevar_vals)
@@ -251,7 +236,7 @@ def accelerate(fun):
     def first_fun(*args):
         raw_args = [arr for arr, _ in args]
         jaxpr, consts, out_tree = make_jaxpr(fun)(*raw_args)
-        consts = tree_util.tree_multimap(parray, consts, util.true_mask(consts))
+        consts = [parray(const, true_mask(const)) for const in consts]
         args_to_numpy = lambda args: [parray(util.to_numpy(raw_arg), mask)
                                       for raw_arg, mask in args]
 
@@ -267,21 +252,38 @@ def accelerate(fun):
 def print_(string):
     print(time.strftime('[%X] ') + string)
 
+def make_jaxpr(f):
+    def pv_like(x):
+        return pe.PartialVal((get_aval(x), jc.unit))
+
+    @wraps(f)
+    def jaxpr_maker(*args):
+        fun = lu.wrap_init(f)
+        jax_args, in_tree = tree_flatten(args)
+        jaxtree_fun, out_tree = flatten_fun_nokwargs(fun, in_tree)
+        pvals = map(pv_like, jax_args)
+        jaxpr, _, consts = pe.trace_to_jaxpr(jaxtree_fun, pvals)
+        return jaxpr, consts, out_tree()
+
+    jaxpr_maker.__name__ = "make_jaxpr({})".format(jaxpr_maker.__name__)
+    return jaxpr_maker
+
 def accelerate_fixed_point(fp, max_iter=1000):
+    fp = lu.wrap_init(fp)
     def accelerated(x):
-        x_size = x.size
-        jaxpr, consts, out_tree = make_jaxpr(fp)(x)
-        x, _ = tree_flatten(x)
-        consts = map(parray, consts, util.true_mask(consts))
-        x = map(parray, x, util.false_mask(x))
-        print_("Progress: 0 of {}".format(x_size))
+        x, in_tree = tree_flatten([x])
+        fp_flat, out_tree = flatten_fun_nokwargs(fp, in_tree)
+        pvals = [pe.PartialVal((get_aval(x_leaf), jc.unit)) for x_leaf in x]
+        jaxpr, _, consts = pe.trace_to_jaxpr(fp_flat, pvals)
+
+        consts = [parray(const, true_mask(const)) for const in consts]
+        x = [parray(x_leaf, false_mask(x_leaf)) for x_leaf in x]
+
         x, env = firstpass(jaxpr, consts, [], x)
-        print_("Progress: {} of {}".format(x[0][1].sum(), x_size))
-        i = 0
-        while not util.mask_all(x[0]) and i < max_iter:
+        i = 1
+        while not all(util.mask_all(x_leaf) for x_leaf in x) and i < max_iter:
             x, env = fastpass(jaxpr, [], x, env)
-            print_("Progress: {} of {}".format(x[0][1].sum(), x_size))
             i = i + 1
         x = [arr for arr, _ in x]
-        return tree_unflatten(out_tree, x)
+        return tree_unflatten(out_tree(), x)
     return accelerated
