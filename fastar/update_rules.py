@@ -439,7 +439,7 @@ def conv_general_dilated_update(old_out, lhs, rhs, window_strides, padding,
 
 fa.update_rules[lax.conv_general_dilated_p] = conv_general_dilated_update
 
-def device_put_update(old_out, x, device_num=0):
+def device_put_update(old_out, x, **params):
     x, mask = x
-    return fa.parray(xla.device_put_p.bind(x, device_num=device_num), mask)
+    return fa.parray(xla.device_put_p.bind(x, **params), mask)
 fa.update_rules[xla.device_put_p] = device_put_update
