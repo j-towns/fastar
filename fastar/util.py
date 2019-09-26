@@ -24,7 +24,6 @@ def unmask_and_flatten(tree):
 
 class HashableMask(object):
     def __init__(self, mask):
-        mask.flags.writeable = False
         self.mask = mask
 
     def __hash__(self):

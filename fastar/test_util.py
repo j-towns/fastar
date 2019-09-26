@@ -1,6 +1,6 @@
 from jax.util import safe_map
 from jax.util import safe_zip
-from fastar import accelerate, Parray
+from fastar import accelerate_part, Parray
 import fastar.util as util
 import numpy as np
 
@@ -42,7 +42,7 @@ def check_custom_input(fun, inputs_from_rng, rtol=1e-5, atol=1e-8, runs=2):
     for _ in range(runs):
         args = inputs_from_rng(rng)
         ans = fun(*args)
-        fun_ac = accelerate(fun)
+        fun_ac = accelerate_part(fun)
         masks = increasing_masks(rng, *args)
         args_ = [Parray((arg, util.false_mask(arg))) for arg in args]
         ans_old, fun_ac = fun_ac(*args_)

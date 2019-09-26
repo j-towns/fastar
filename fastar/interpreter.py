@@ -14,7 +14,7 @@ import jax.interpreters.ad as ad
 from jax.ad_util import zeros_like_aval
 import jax.interpreters.partial_eval as pe
 import jax.linear_util as lu
-from jax.util import safe_map, safe_zip, unzip2, partial, unzip3
+from jax.util import safe_map, safe_zip, unzip2, partial, unzip3, cache
 from jax import abstract_arrays
 from jax import eval_shape
 
@@ -40,7 +40,7 @@ def init_ans(prim, *args, **params):
     if prim in init_rules:
         return init_rules[prim](*args, **params)
     else:
-        args = map(lambda arg: get_aval(arg[0]), args)
+        args = [get_aval(arg) for arg, _ in args]
         abstract_out = prim.abstract_eval(*args, **params)
         if prim.multiple_results:
             return [parray(zeros_like_aval(o), false_mask(o))
@@ -55,7 +55,7 @@ def get_update(p):
         return update_rules[p]
     except KeyError:
         raise NotImplementedError(
-            "Parray computation rule for '{}' not implemented".format(p))
+            "Fastar update rule for '{}' not implemented".format(p))
 
 # Populate the cache
 def firstpass(jaxpr, consts, freevar_vals, args):
@@ -232,49 +232,36 @@ class Parray(tuple):
 parray = lambda arr, mask: Parray((arr, mask))
 
 ## High level API
-def accelerate(fun):
+def accelerate_part(fun):
     def first_fun(*args):
-        raw_args = [arr for arr, _ in args]
-        jaxpr, consts, out_tree = make_jaxpr(fun)(*raw_args)
+        args_flat, in_tree = tree_flatten(args)
+        avals = tuple(get_aval(arg) for arg, _ in args_flat)
+        jaxpr, consts, out_tree = fastar_jaxpr(
+            lu.wrap_init(fun), in_tree, avals)
         consts = [parray(const, true_mask(const)) for const in consts]
-        args_to_numpy = lambda args: [parray(util.to_numpy(raw_arg), mask)
-                                      for raw_arg, mask in args]
-
-        ans, env = firstpass(jaxpr, consts, [], args_to_numpy(args))
+        ans, env = firstpass(jaxpr, consts, [], args_flat)
         ans = tree_unflatten(out_tree, ans)
         def fast_fun(env, *args):
-            ans, env = fastpass(jaxpr, [], args_to_numpy(args), env)
+            args_flat, _ = tree_flatten(args)
+            ans, env = fastpass(jaxpr, [], args_flat, env)
             ans = tree_unflatten(out_tree, ans)
             return ans, partial(fast_fun, env)
         return ans, partial(fast_fun, env)
     return first_fun
 
-def print_(string):
-    print(time.strftime('[%X] ') + string)
+@cache()
+def fastar_jaxpr(fun, in_tree, in_avals):
+    in_pvals = [pe.PartialVal((aval, jc.unit)) for aval in in_avals]
+    fun_flat, out_tree = flatten_fun_nokwargs(fun, in_tree)
+    jaxpr, _, consts = pe.trace_to_jaxpr(fun_flat, in_pvals)
+    return jaxpr, consts, out_tree()
 
-def make_jaxpr(f):
-    def pv_like(x):
-        return pe.PartialVal((get_aval(x), jc.unit))
-
-    @wraps(f)
-    def jaxpr_maker(*args):
-        fun = lu.wrap_init(f)
-        jax_args, in_tree = tree_flatten(args)
-        jaxtree_fun, out_tree = flatten_fun_nokwargs(fun, in_tree)
-        pvals = map(pv_like, jax_args)
-        jaxpr, _, consts = pe.trace_to_jaxpr(jaxtree_fun, pvals)
-        return jaxpr, consts, out_tree()
-
-    jaxpr_maker.__name__ = "make_jaxpr({})".format(jaxpr_maker.__name__)
-    return jaxpr_maker
-
-def accelerate_fixed_point(fp, max_iter=1000):
-    fp = lu.wrap_init(fp)
+def accelerate(fixed_point_fun, max_iter=1000):
+    fp = lu.wrap_init(fixed_point_fun)
     def accelerated(x):
         x, in_tree = tree_flatten([x])
-        fp_flat, out_tree = flatten_fun_nokwargs(fp, in_tree)
-        pvals = [pe.PartialVal((get_aval(x_leaf), jc.unit)) for x_leaf in x]
-        jaxpr, _, consts = pe.trace_to_jaxpr(fp_flat, pvals)
+        x_avals = tuple(get_aval(x_leaf) for x_leaf in x)
+        jaxpr, consts, out_tree = fastar_jaxpr(fp, in_tree, x_avals)
 
         consts = [parray(const, true_mask(const)) for const in consts]
         x = [parray(x_leaf, false_mask(x_leaf)) for x_leaf in x]
@@ -285,5 +272,5 @@ def accelerate_fixed_point(fp, max_iter=1000):
             x, env = fastpass(jaxpr, [], x, env)
             i = i + 1
         x = [arr for arr, _ in x]
-        return tree_unflatten(out_tree(), x)
+        return tree_unflatten(out_tree, x)
     return accelerated
