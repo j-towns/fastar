@@ -17,6 +17,10 @@ def mask_all(parray):
     _, mask = parray
     return np.all(mask)
 
+def tree_mask_all(pytree):
+    flat, _ = tree_util.tree_flatten(pytree)
+    return all(mask_all(parray) for parray in flat)
+
 def unmask_and_flatten(tree):
     parrays, treedef = tree_util.tree_flatten(tree)
     arrs, masks = unzip2(parrays)
