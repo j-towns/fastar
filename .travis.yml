@@ -17,7 +17,7 @@ before_install:
 install:
   - conda install --yes python=$TRAVIS_PYTHON_VERSION pip pytest six protobuf>=3.6.0 absl-py opt_einsum numpy scipy
   - pip install jaxlib
-  - pip install git+git://github.com/google/jax.git
+  - pip install git+git://github.com/j-towns/jax.git@fastar-dev
   - pip install -v .
 script:
   - cd tests
