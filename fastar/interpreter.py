@@ -2,8 +2,6 @@ import time
 from operator import itemgetter
 from collections import OrderedDict
 
-from IPython.display import ProgressBar
-
 from jax.api_util import flatten_fun, wraps, flatten_fun_nokwargs
 from jax.tree_util import tree_flatten, tree_unflatten, tree_map
 import jax.core as jc
