@@ -243,7 +243,6 @@ def accelerate_part(fun):
 
 @cache()
 def fastar_jaxpr(fun, in_tree, in_avals):
-    print("hello")
     in_pvals = [pe.PartialVal((aval, jc.unit)) for aval in in_avals]
     fun_flat, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
     jaxpr, _, consts = pe.trace_to_jaxpr(fun_flat, in_pvals)
