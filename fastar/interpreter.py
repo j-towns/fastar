@@ -61,16 +61,16 @@ def firstpass(jaxpr, consts, freevar_vals, args):
         if type(v) is jc.Literal:
             return parray(v.val, true_mask(v.val))
         else:
-            val = env[v]
+            val = env[repr(v)]
             assert isinstance(val, Parray)
             return val
 
     def write(v, val):
         assert isinstance(val, Parray)
-        env[v] = val
+        env[repr(v)] = val
 
     def write_subenvs(vs, env):
-        subenvs[vs] = env
+        subenvs[repr(vs)] = env
 
     env = Env()
     subenvs = Env()
@@ -136,7 +136,7 @@ def fastpass(jaxpr, freevar_vals, args, old_env):
         if type(v) is jc.Literal:
             return parray(v.val, true_mask(v.val))
         else:
-            val = env[v]
+            val = env[repr(v)]
             assert isinstance(val, Parray)
             return val
 
@@ -144,19 +144,19 @@ def fastpass(jaxpr, freevar_vals, args, old_env):
         if type(v) is jc.Literal:
             return parray(v.val, true_mask(v.val))
         else:
-            val = old_env[v]
+            val = old_env[repr(v)]
             assert isinstance(val, Parray)
             return val
 
     def read_old_subenvs(vs):
-        return old_subenvs[vs]
+        return old_subenvs[repr(vs)]
 
     def write(v, val):
         assert isinstance(val, Parray)
-        env[v] = val
+        env[repr(v)] = val
 
     def write_subenvs(vs, env):
-        subenvs[vs] = env
+        subenvs[repr(vs)] = env
 
     def copy_old_to_new(v):
         write(v, read_old(v))
@@ -271,3 +271,28 @@ def accelerate(fixed_point_fun, max_iter=1000):
             i = i + 1
         return tree_map(lambda x_leaf: x_leaf[0], x)
     return accelerated
+
+def accelerate_sections(fixed_point_fun, jit_every=10):
+    def accelerated_start(x):
+        x = tree_map(lambda x_leaf: parray(x_leaf, false_mask(x_leaf)), x)
+        x, env = init_env(fixed_point_fun, [x])
+        i = 1
+        while not util.tree_mask_all(x) and i < jit_every:
+            x, env = update_env(fixed_point_fun, [x], env)
+            i = i + 1
+        x, x_mask = util.tree_unmask(x)
+        env, env_mask = util.tree_unmask(env)
+        return x, env, (x_mask, env_mask)
+
+    def accelerated_section(x, env, masks):
+        x_mask, env_mask = masks
+        x = tree_util.tree_multimap(parray, x, x_mask)
+        env = tree_util.tree_multimap(parray, env, env_mask)
+        i = 0
+        while not util.tree_mask_all(x) and i < jit_every:
+            x, env = update_env(fixed_point_fun, [x], env)
+            i = i + 1
+        x, x_mask = util.tree_unmask(x)
+        env, env_mask = util.tree_unmask(env)
+        return x, env, (x_mask, env_mask)
+    return accelerated_start, accelerated_section

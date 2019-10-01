@@ -26,6 +26,12 @@ def unmask_and_flatten(tree):
     arrs, masks = unzip2(parrays)
     return arrs, masks, treedef
 
+def tree_unmask(tree):
+    flat, treedef = tree_util.tree_flatten(tree)
+    arrs, masks = unzip2(flat)
+    return (tree_util.tree_unflatten(treedef, arrs),
+            tree_util.tree_unflatten(treedef, masks))
+
 class HashableMask(object):
     def __init__(self, mask):
         self.mask = mask
