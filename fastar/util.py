@@ -18,8 +18,7 @@ def mask_all(parray):
     return np.all(mask)
 
 def tree_mask_all(pytree):
-    flat, _ = tree_util.tree_flatten(pytree)
-    return all(mask_all(parray) for parray in flat)
+    return all(map(mask_all, tree_util.tree_leaves(pytree)))
 
 def unmask_and_flatten(tree):
     parrays, treedef = tree_util.tree_flatten(tree)

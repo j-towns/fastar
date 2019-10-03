@@ -3,9 +3,9 @@ from operator import itemgetter
 from collections import OrderedDict
 
 from jax.api_util import flatten_fun, wraps, flatten_fun_nokwargs
-from jax.tree_util import tree_flatten, tree_unflatten, tree_map
+from jax.tree_util import (tree_flatten, tree_unflatten, tree_map, build_tree,
+                           tree_multimap)
 import jax.core as jc
-from jax.tree_util import build_tree
 from jax import tree_util
 import jax.interpreters.xla as xla
 import jax.interpreters.ad as ad
@@ -272,27 +272,27 @@ def accelerate(fixed_point_fun, max_iter=1000):
         return tree_map(lambda x_leaf: x_leaf[0], x)
     return accelerated
 
+# The point of this is that it isn't a pytree node
+class ProtectedMasks(tuple):
+    pass
+
 def accelerate_sections(fixed_point_fun, jit_every=10):
     def accelerated_start(x):
-        x = tree_map(lambda x_leaf: parray(x_leaf, false_mask(x_leaf)), x)
+        x = tree_map(lambda arr: parray(arr, false_mask(arr)), x)
         x, env = init_env(fixed_point_fun, [x])
         i = 1
         while not util.tree_mask_all(x) and i < jit_every:
             x, env = update_env(fixed_point_fun, [x], env)
             i = i + 1
-        x, x_mask = util.tree_unmask(x)
-        env, env_mask = util.tree_unmask(env)
-        return x, env, (x_mask, env_mask)
+        (x, env), masks = util.tree_unmask((x, env))
+        return x, env, ProtectedMasks(masks)
 
     def accelerated_section(x, env, masks):
-        x_mask, env_mask = masks
-        x = tree_util.tree_multimap(parray, x, x_mask)
-        env = tree_util.tree_multimap(parray, env, env_mask)
+        x, env = tree_multimap(parray, (x, env), tuple(masks))
         i = 0
         while not util.tree_mask_all(x) and i < jit_every:
             x, env = update_env(fixed_point_fun, [x], env)
             i = i + 1
-        x, x_mask = util.tree_unmask(x)
-        env, env_mask = util.tree_unmask(env)
-        return x, env, (x_mask, env_mask)
+        (x, env), masks = util.tree_unmask((x, env))
+        return x, env, ProtectedMasks(masks)
     return accelerated_start, accelerated_section
