@@ -1,20 +1,16 @@
-import time
-from operator import itemgetter
-from collections import OrderedDict
+from contextlib import contextmanager
 
-from jax.api_util import flatten_fun, wraps, flatten_fun_nokwargs
-from jax.tree_util import (tree_flatten, tree_unflatten, tree_map, build_tree,
-                           tree_multimap)
+from jax.api_util import flatten_fun_nokwargs
+from jax.tree_util import (
+    tree_flatten, tree_unflatten, tree_map, Partial, register_pytree_node)
 import jax.core as jc
-from jax import tree_util
 import jax.interpreters.xla as xla
-import jax.interpreters.ad as ad
 from jax.ad_util import zeros_like_aval
 import jax.interpreters.partial_eval as pe
 import jax.linear_util as lu
-from jax.util import safe_map, safe_zip, unzip2, partial, unzip3, cache
+from jax.util import safe_map, safe_zip, partial, unzip3, cache
 from jax import abstract_arrays
-from jax import eval_shape
+from jax import jit as jit_
 
 import fastar.util as util
 from fastar.util import true_mask, false_mask
@@ -24,13 +20,6 @@ zip = safe_zip
 
 def get_aval(x):
     return abstract_arrays.raise_to_shaped(jc.get_aval(x))
-
-class Env(OrderedDict): pass
-def env_to_iterable(env):
-    keys = tuple(env.keys())
-    return tuple(map(env.get, keys)), keys
-tree_util.register_pytree_node(Env, env_to_iterable,
-                               lambda keys, xs: Env(zip(keys, xs)))
 
 ## Core
 init_rules = {}
@@ -75,8 +64,8 @@ def firstpass(jaxpr, consts, freevar_vals, args):
     def write_subenvs(vs, env):
         subenvs[repr(vs)] = env
 
-    env = Env()
-    subenvs = Env()
+    env = {}
+    subenvs = {}
 
     write(jc.unitvar, parray(jc.unit, true_mask(jc.unit)))
     map(write, jaxpr.constvars, consts)
@@ -110,30 +99,23 @@ def firstpass(jaxpr, consts, freevar_vals, args):
     map(delete, jaxpr.freevars)
     return map(read, jaxpr.outvars), (env, subenvs)
 
-def wrap(arr, mask):
-    return parray(arr, mask.mask)
-
 @lu.transformation_with_aux
-def inited_fun(jaxpr, in_tree_def, masks, *args):
-    args = [parray(a, m.mask) for a, m in zip(args, masks)]
+def inited_fun(jaxpr, in_tree_def, *args):
     consts, freevar_vals, args = tree_unflatten(in_tree_def, args)
     out = yield (jaxpr, consts, freevar_vals, args), {}
     out = out[0], (out[1],)  # Tuple of envs, not singleton env
-    out, out_mask, out_treedef = util.unmask_and_flatten(out)
-    yield out, (out_mask, out_treedef)
+    out, out_treedef = tree_flatten(out)
+    yield out, out_treedef
 
 def call_init_rule(primitive, params, jaxpr, consts, freevar_vals, in_vals):
     jaxpr, = jaxpr
     consts, = consts
     freevar_vals, = freevar_vals
-    all_args, masks, in_treedef = util.unmask_and_flatten(
-        (consts, freevar_vals, in_vals))
-    masks = tuple(map(util.HashableMask, masks))
+    all_args, in_treedef = tree_flatten((consts, freevar_vals, in_vals))
     fun = lu.wrap_init(firstpass)
-    fun, out_mask_and_treedef = inited_fun(fun, jaxpr, in_treedef, masks)
+    fun, out_treedef = inited_fun(fun, jaxpr, in_treedef)
     out = primitive.bind(fun, *all_args, **params)
-    out_mask, out_treedef = out_mask_and_treedef()
-    return tree_unflatten(out_treedef, map(parray, out, out_mask))
+    return tree_unflatten(out_treedef(), out)
 init_rules[xla.xla_call_p] = partial(call_init_rule, xla.xla_call_p)
 
 def fastpass(jaxpr, consts, freevar_vals, args, old_env):
@@ -168,8 +150,8 @@ def fastpass(jaxpr, consts, freevar_vals, args, old_env):
     def delete(v):
         del env[repr(v)]
 
-    env = Env()
-    subenvs = Env()
+    env = {}
+    subenvs = {}
 
     write(jc.unitvar, parray(jc.unit, true_mask(jc.unit)))
     map(write, jaxpr.constvars, consts)
@@ -206,27 +188,24 @@ def fastpass(jaxpr, consts, freevar_vals, args, old_env):
     return map(read, jaxpr.outvars), (env, subenvs)
 
 @lu.transformation_with_aux
-def updated_fun(jaxpr, in_treedef, masks, *args):
-    args = [parray(a, m.mask) for a, m in zip(args, masks)]
+def updated_fun(jaxpr, in_treedef, *args):
     consts, freevar_vals, args, env = tree_unflatten(in_treedef, args)
     out = yield (jaxpr, consts, freevar_vals, args, env), {}
     out = out[0], (out[1],)  # Tuple of envs, not singleton env
-    out, out_mask, out_treedef = util.unmask_and_flatten(out)
-    yield out, (out_mask, out_treedef)
+    out, out_treedef = tree_flatten(out)
+    yield out, out_treedef
 
-def call_update_rule(primitive, params, jaxpr, consts, freevar_vals, in_vals, env):
+def call_update_rule(
+        primitive, params, jaxpr, consts, freevar_vals, in_vals, env):
     jaxpr, = jaxpr
     consts, = consts
     freevar_vals, = freevar_vals
     env, = env
-    all_args, masks, in_treedef = util.unmask_and_flatten(
-        (consts, freevar_vals, in_vals, env))
-    masks = tuple(map(util.HashableMask, masks))
+    all_args, in_treedef = tree_flatten((consts, freevar_vals, in_vals, env))
     fun = lu.wrap_init(fastpass)
-    fun, out_mask_and_treedef = updated_fun(fun, jaxpr, in_treedef, masks)
+    fun, out_treedef = updated_fun(fun, jaxpr, in_treedef)
     out = primitive.bind(fun, *all_args, **params)
-    out_mask, out_treedef = out_mask_and_treedef()
-    return tree_unflatten(out_treedef, map(parray, out, out_mask))
+    return tree_unflatten(out_treedef(), out)
 update_rules[xla.xla_call_p] = partial(call_update_rule, xla.xla_call_p)
 
 class Parray(tuple):
@@ -240,17 +219,67 @@ class Parray(tuple):
     np.all(~computed & arr == 0).
     """
     pass
+
+# This isn't a pytree node
+class ProtectedParray(Parray):
+    pass
+
+def _parray_to_iterable(parray):
+    if protect_parrays_state:
+        return (ProtectedParray(parray),), None
+    else:
+        arr, mask = parray
+        return (arr,), util.HashableMask(mask)
+def _iterable_to_parray(mask, arr):
+    arr, = arr
+    if mask is None:
+        return arr
+    else:
+        return parray(arr, mask.mask)
 parray = lambda arr, mask: Parray((arr, mask))
+register_pytree_node(Parray, _parray_to_iterable, _iterable_to_parray)
+
+protect_parrays_state = []
+@contextmanager
+def protect_parrays():
+    protect_parrays_state.append(None)
+    yield
+    protect_parrays_state.pop()
 
 ## High level API
-def accelerate_part(fun):
+def accelerate_part(fun, jit=True):
+    def fast_fun(env, *args):
+        ans, env = update_env(fun, args, env)
+        return ans, Partial(fast_fun, env)
+    fast_fun = jit_(fast_fun) if jit else fast_fun
+
     def first_fun(*args):
         ans, env = init_env(fun, args)
-        def fast_fun(env, *args):
-            ans, env = update_env(fun, args, env)
-            return ans, partial(fast_fun, env)
-        return ans, partial(fast_fun, env)
+        return ans, Partial(fast_fun, env)
+    first_fun = jit_(first_fun) if jit else first_fun
     return first_fun
+
+def accelerate_sections(fixed_point_fun, jit_every=10):
+    @jit_
+    def accelerated_start(fp_args, x):
+        fp = fixed_point_fun(*fp_args)
+        x = tree_map(lambda arr: parray(arr, false_mask(arr)), x)
+        x, env = init_env(fp, [x])
+        i = 1
+        while not util.mask_all(x) and i < jit_every:
+            x, env = update_env(fp, [x], env)
+            i = i + 1
+        return x, Partial(accelerated_section, fp_args, env)
+
+    @jit_
+    def accelerated_section(fp_args, env, x):
+        fp = fixed_point_fun(*fp_args)
+        i = 0
+        while not util.mask_all(x) and i < jit_every:
+            x, env = update_env(fp, [x], env)
+            i = i + 1
+        return x, Partial(accelerated_section, fp_args, env)
+    return accelerated_start
 
 @cache()
 def fastar_jaxpr(fun, in_tree, in_avals):
@@ -260,7 +289,10 @@ def fastar_jaxpr(fun, in_tree, in_avals):
     return jaxpr, consts, out_tree()
 
 def init_env(fun, args):
-    args_flat, in_tree = tree_flatten(args)
+    with protect_parrays():
+        args_flat, in_tree = tree_flatten(args)
+    assert all(type(arg) is ProtectedParray for arg in args_flat)
+    args_flat = [Parray(arg) for arg in args_flat]
     avals = tuple(get_aval(arg) for arg, _ in args_flat)
     jaxpr, consts, out_tree = fastar_jaxpr(fun, in_tree, avals)
     consts = [parray(const, true_mask(const)) for const in consts]
@@ -268,45 +300,12 @@ def init_env(fun, args):
     return tree_unflatten(out_tree, ans), env
 
 def update_env(fun, args, env):
-    args_flat, in_tree = tree_flatten(args)
+    with protect_parrays():
+        args_flat, in_tree = tree_flatten(args)
+    assert all(type(arg) is ProtectedParray for arg in args_flat)
+    args_flat = [Parray(arg) for arg in args_flat]
     avals = tuple(get_aval(arg) for arg, _ in args_flat)
     jaxpr, consts, out_tree = fastar_jaxpr(fun, in_tree, avals)
     consts = [parray(const, true_mask(const)) for const in consts]
     ans, env = fastpass(jaxpr, consts, [], args_flat, env)
     return tree_unflatten(out_tree, ans), env
-
-def accelerate(fixed_point_fun, max_iter=1000):
-    def accelerated(x):
-        x = tree_map(lambda x_leaf: parray(x_leaf, false_mask(x_leaf)), x)
-        x, env = init_env(fixed_point_fun, [x])
-        i = 1
-        while not util.tree_mask_all(x) and i < max_iter:
-            x, env = update_env(fixed_point_fun, [x], env)
-            i = i + 1
-        return tree_map(lambda x_leaf: x_leaf[0], x)
-    return accelerated
-
-# The point of this is that it isn't a pytree node
-class ProtectedMasks(tuple):
-    pass
-
-def accelerate_sections(fixed_point_fun, jit_every=10):
-    def accelerated_start(x):
-        x = tree_map(lambda arr: parray(arr, false_mask(arr)), x)
-        x, env = init_env(fixed_point_fun, [x])
-        i = 1
-        while not util.tree_mask_all(x) and i < jit_every:
-            x, env = update_env(fixed_point_fun, [x], env)
-            i = i + 1
-        (x, env), masks = util.tree_unmask((x, env))
-        return x, env, ProtectedMasks(masks)
-
-    def accelerated_section(x, env, masks):
-        x, env = tree_multimap(parray, (x, env), tuple(masks))
-        i = 0
-        while not util.tree_mask_all(x) and i < jit_every:
-            x, env = update_env(fixed_point_fun, [x], env)
-            i = i + 1
-        (x, env), masks = util.tree_unmask((x, env))
-        return x, env, ProtectedMasks(masks)
-    return accelerated_start, accelerated_section

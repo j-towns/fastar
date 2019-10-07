@@ -1,2 +1,3 @@
 import fastar.update_rules
-from fastar.interpreter import accelerate, accelerate_part, Parray
+from fastar.interpreter import (
+    accelerate_sections, accelerate_part, Parray, parray)
