@@ -189,50 +189,6 @@ reduce_ops = [
 for op in reduce_ops:
     fa.update_rules[op] = reduce_update(op)
 
-
-def dot_update(ans, a, b, precision=None):
-    a, a_mask = a
-    b, b_mask = b
-    ansval, ansmask = ans
-    if a.ndim == b.ndim == 1:
-        # Vector-vector product
-        if onp.all(a_mask) and onp.all(b_mask) and not ansmask:
-            return fa.Parray((lax.dot(a, b, precision=precision), True))
-        else:
-            return ans
-    elif a.ndim == 2 and b.ndim == 1:
-        # Matrix-vector product
-        if onp.all(b_mask):
-            new_ansmask = onp.all(a_mask, 1)
-            for s in util.mask_to_slices(new_ansmask &~ ansmask):
-                ansval = index_update(
-                    ansval, s, lax.dot_p.bind(a[s], b, precision=precision))
-            return fa.Parray((ansval, new_ansmask))
-        else:
-            return ans
-    elif a.ndim == 1 and b.ndim == 2:
-        # Vector-matrix product
-        if onp.all(a_mask):
-            new_ansmask = onp.all(b_mask, 0)
-            for s in util.mask_to_slices(new_ansmask &~ ansmask):
-                ansval = index_update(
-                    ansval, s, lax.dot_p.bind(a, b[:, s[0]],
-                                              precision=precision))
-            return fa.Parray((ansval, new_ansmask))
-        else:
-            return fa.Parray((ansval, ansmask))
-    else:
-        # Matrix-matrix product
-        new_ansmask = onp.all(a_mask, 1, keepdims=True) & onp.all(b_mask, 0)
-        for s in util.mask_to_slices(new_ansmask &~ ansmask):
-            ansval = index_update(
-                ansval, s, lax.dot_p.bind(
-                    a[s[0]], b[:, s[1]], precision=precision))
-        return fa.Parray((ansval, new_ansmask))
-
-fa.update_rules[lax.dot_p] = dot_update
-
-
 def dot_general_update(ans, a, b, dimension_numbers, precision=None):
     a, a_mask = a
     b, b_mask = b

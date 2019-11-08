@@ -184,13 +184,6 @@ class ApplyTrace(jc.Trace):
             return map(partial(ApplyTracer, trace, net_params), x)
         return vals, todo
 
-def apply_transform(fun, net_params, inputs):
-    with jc.new_master(ApplyTrace) as master:
-        fun = apply_subtrace(fun, master, WrapHashably(net_params))
-        out_val = fun.call_wrapped(*inputs)
-        del master
-    return out_val
-
 @lu.transformation
 def apply_subtrace(master, net_params, *vals):
     net_params = net_params.val
@@ -387,8 +380,7 @@ def _gumbel_max(rng, logit_probs):
     nr_mix, _, _ = logit_probs.shape
     idxs = np.argmax(random.gumbel(rng, logit_probs.shape, logit_probs.dtype) +
                      logit_probs, axis=0)
-    return np.moveaxis(idxs[..., np.newaxis] == np.arange(nr_mix),
-                       -1, 0)
+    return np.moveaxis(idxs[..., np.newaxis] == np.arange(nr_mix), -1, 0)
 
 def conditional_params_to_sample(rng, conditional_params):
     means, inv_scales, logit_probs = conditional_params

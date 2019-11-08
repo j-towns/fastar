@@ -27,7 +27,7 @@ def PixelCNNPP(nr_resnet=5, nr_filters=160, nr_logistic_mix=10, **resnet_kwargs)
 
         us  = [nn.down_shift(conv_down(image, filter_shape=[2, 3]))]
         uls = [nn.down_shift(conv_down(image, filter_shape=[1, 3]))
-              + nn.right_shift(conv_down_right(image, filter_shape=[2, 1]))]
+               + nn.right_shift(conv_down_right(image, filter_shape=[2, 1]))]
 
         for _ in range(nr_resnet):
             rng, rng_d, rng_dr = random.split(rng, 3)
