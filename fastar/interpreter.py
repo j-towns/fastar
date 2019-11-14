@@ -124,7 +124,7 @@ def fastpass(jaxpr, consts, freevar_vals, args, old_env):
 
     def read(v):
         if type(v) is jc.Literal:
-            return parray(v.val, true_mask(v.val))
+            return parray(np.asarray(v.val), true_mask(v.val))
         else:
             val = env[repr(v)]
             assert isinstance(val, Parray)

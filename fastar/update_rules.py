@@ -49,6 +49,7 @@ def sliceableop_update(func, old_out, output_mask,
 @curry
 def nop_update(op, ans, *args):
     args, arg_masks = zip(*args)
+    args = map(np.asarray, args)
     ans, ans_mask = ans
     new_ans_mask = reduce(and_, arg_masks)
     slices = util.mask_to_slices(new_ans_mask &~ ans_mask)
