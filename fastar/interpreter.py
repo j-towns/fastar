@@ -270,7 +270,7 @@ def accelerate_sections(fixed_point_fun, jit_every=10):
             x, env = update_env(fp, [x], env)
             i = i + 1
         if util.mask_all(x):
-            return x
+            return x, None
         else:
             return x, Partial(accelerated_section, fp_args, env)
 
@@ -282,7 +282,7 @@ def accelerate_sections(fixed_point_fun, jit_every=10):
             x, env = update_env(fp, [x], env)
             i = i + 1
         if util.mask_all(x):
-            return x
+            return x, None
         else:
             return x, Partial(accelerated_section, fp_args, env)
     return accelerated_start
