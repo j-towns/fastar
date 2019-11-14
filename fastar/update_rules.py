@@ -61,6 +61,7 @@ def nop_update(op, ans, *args):
 nops = [
     lax.abs_p,
     lax.add_p,
+    lax.and_p,
     lax.ceil_p,
     lax.cos_p,
     lax.div_p,
@@ -69,6 +70,7 @@ nops = [
     lax.floor_p,
     lax.ge_p,
     lax.gt_p,
+    lax.is_finite_p,
     lax.le_p,
     lax.log_p,
     lax.log1p_p,
@@ -78,6 +80,7 @@ nops = [
     lax.mul_p,
     lax.ne_p,
     lax.neg_p,
+    lax.not_p,
     lax.rem_p,
     lax.select_p,
     lax.sign_p,

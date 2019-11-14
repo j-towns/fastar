@@ -5,6 +5,7 @@ from jax.tree_util import (
     tree_flatten, tree_unflatten, tree_map, Partial, register_pytree_node)
 import jax.core as jc
 import jax.interpreters.xla as xla
+import jax.numpy as np
 from jax.ad_util import zeros_like_aval
 import jax.interpreters.partial_eval as pe
 import jax.linear_util as lu
@@ -48,7 +49,7 @@ def get_update(p):
 def firstpass(jaxpr, consts, freevar_vals, args):
     def read(v):
         if type(v) is jc.Literal:
-            return parray(v.val, true_mask(v.val))
+            return parray(np.asarray(v.val), true_mask(v.val))
         else:
             val = env[repr(v)]
             assert isinstance(val, Parray)
