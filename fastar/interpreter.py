@@ -269,7 +269,10 @@ def accelerate_sections(fixed_point_fun, jit_every=10):
         while not util.mask_all(x) and i < jit_every:
             x, env = update_env(fp, [x], env)
             i = i + 1
-        return x, Partial(accelerated_section, fp_args, env)
+        if util.mask_all(x):
+            return x
+        else:
+            return x, Partial(accelerated_section, fp_args, env)
 
     @jit_
     def accelerated_section(fp_args, env, x):
@@ -278,7 +281,10 @@ def accelerate_sections(fixed_point_fun, jit_every=10):
         while not util.mask_all(x) and i < jit_every:
             x, env = update_env(fp, [x], env)
             i = i + 1
-        return x, Partial(accelerated_section, fp_args, env)
+        if util.mask_all(x):
+            return x
+        else:
+            return x, Partial(accelerated_section, fp_args, env)
     return accelerated_start
 
 @cache()
