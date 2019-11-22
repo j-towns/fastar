@@ -261,7 +261,7 @@ def ConvTranspose(out_chan, filter_shape=[3, 3], strides=None, padding='SAME',
             apply_fun, rng, example_input, out_chan, filter_shape, init_scale)
     def apply_fun(params, inputs):
         V, g, b = params
-        W = g * _l2_normalize(V, (1, 2, 3))
+        W = g * _l2_normalize(V, (0, 1, 2))
         return _unbatch(lax.conv_transpose, inputs, W, strides, padding) - b,
     return (lambda *args:
             Layer('ConvTransposeLayer', init_fun, apply_fun).bind(*args)[0])
