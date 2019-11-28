@@ -6,10 +6,7 @@ import jax.numpy as np
 from jax.interpreters import xla
 import jax.scipy.special as special
 import numpy as onp
-from jax import vjp
-from jax.abstract_arrays import make_shaped_array
-from jax.ad_util import zeros_like_aval
-from jax.util import curry, safe_zip, safe_map, unzip2, WrapHashably
+from jax.util import curry, safe_zip, safe_map
 
 import fastar.util as util
 from . import interpreter as fa
@@ -68,6 +65,7 @@ nops = [
     lax.div_p,
     lax.eq_p,
     lax.exp_p,
+    lax.expm1_p,
     lax.floor_p,
     lax.ge_p,
     lax.gt_p,
@@ -336,13 +334,8 @@ def conv_general_dilated_update_slice_op(
     out_start, out_stop = onp.transpose([[s.start, s.stop] for s in out_slc])
     out_start_dilated = out_start[2:] * onp.array(window_strides)
     out_stop_dilated = (out_stop[2:] - 1) * onp.array(window_strides) + 1
-    lhs_bounds = out_start_dilated, out_stop_dilated + window_shape - 1
     lhs_start_dilated = out_start_dilated - pad_low
     lhs_stop_dilated = out_stop_dilated + window_shape - 1 - pad_low
-    lhs_start = onp.clip((lhs_start_dilated - 1) // lhs_dilation + 1, 0,
-                         lhs_shape[2:])
-    lhs_stop = onp.clip((lhs_stop_dilated - 1) // lhs_dilation + 1, 0,
-                        lhs_shape[2:])
     lhs_start, lhs_stop = onp.clip(
         (onp.array([lhs_start_dilated, lhs_stop_dilated]) - 1) // lhs_dilation + 1, 0,
                                    lhs_shape[2:])
