@@ -8,7 +8,8 @@ import numpy as onp
 from absl.testing import parameterized
 from jax import numpy as np, jit
 from jax import test_util as jtu
-from fastar.fastar import Parray, _init_env, _update_env
+from fastar import Parray
+from fastar.core import _init_env, _update_env
 from fastar.util import false_mask, mask_to_slices
 from jax.tree_util import Partial
 from jax.util import safe_map, safe_zip

@@ -1,0 +1,1 @@
+from fastar.core import accelerate, Parray
