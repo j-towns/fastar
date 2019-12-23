@@ -15,8 +15,7 @@ import numpy as onp
 from jax import numpy as np, abstract_arrays, jit as jit_
 from jax.ad_util import zeros_like_aval
 from jax.api_util import flatten_fun_nokwargs
-from jax.fastar_util import true_mask, false_mask, mask_all, HashableMask, \
-  mask_to_slices
+from .util import true_mask, false_mask, mask_all, HashableMask, mask_to_slices
 from jax.interpreters import xla
 from jax.ops import index_update
 from jax.tree_util import (
