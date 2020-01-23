@@ -215,25 +215,25 @@ class FastarTest(jtu.JaxTestCase):
                           strides=(2, 1, 1)), (7, 2, 1))
 
   # TODO implement simultaneous negative + interior:
-  # (((-1, -2, 2),), ((5,), ())), (((-1, -2, 1), (1, 2, 2)), ((4, 2), ()))
+  # (((-1, -2, 2),), (5,)), (((-1, -2, 1), (1, 2, 2)), (4, 2)))
   @parameterized.named_parameters({
                                     'testcase_name': "padding_config={}_shapes={}".format(
-                                      padding_config, shapes),
+                                      padding_config, shape),
                                     'padding_config': padding_config,
-                                    'shapes': shapes}
-                                  for padding_config, shapes in (
-                                      (((1, 2, 0),), ((2,), ())),
-                                      (((1, 2, 0), (3, 4, 0)), ((1, 2), ())),
-                                      (((0, 0, 0), (0, 0, 0)), ((1, 2), ())),
-                                      (((1, 2, 3),), ((2,), ())),
-                                      (((1, 2, 1), (3, 4, 2)), ((3, 2), ())),
-                                      (((-1, 2, 0),), ((2,), ())),
-                                      (((-1, -2, 0), (1, 2, 0)), ((4, 2), ())),
-                                      (((-1, 2, 0), (1, 2, 2)), ((4, 2), ()))))
-  def test_pad_vector(self, padding_config, shapes):
+                                    'shape': shape}
+                                  for padding_config, shape in (
+                                      (((1, 2, 0),), (2,)),
+                                      (((1, 2, 0), (3, 4, 0)), (1, 2)),
+                                      (((0, 0, 0), (0, 0, 0)), (1, 2)),
+                                      (((1, 2, 3),), (2,)),
+                                      (((1, 2, 1), (3, 4, 2)), (3, 2)),
+                                      (((-1, 2, 0),), (2,)),
+                                      (((-1, -2, 0), (1, 2, 0)), (4, 2)),
+                                      (((-1, 2, 0), (1, 2, 2)), (4, 2))))
+  def test_pad_vector(self, padding_config, shape):
     check(lambda x, padding_value: lax.pad(x, padding_value,
                                            padding_config=padding_config),
-          *shapes)
+          shape, ())
 
   @parameterized.named_parameters(jtu.cases_from_list(
     {

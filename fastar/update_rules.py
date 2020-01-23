@@ -119,13 +119,13 @@ def _gather_update(
   start_indices, start_indices_mask = start_indices
   assert onp.all(start_indices_mask)
   # Treat gather as a cheap op
-  return parray(
+  return Parray((
     lax.gather_p.bind(
       operand, start_indices, dimension_numbers=dimension_numbers,
       slice_sizes=slice_sizes, **params),
     onp.asarray(lax.gather_p.bind(
       operand_mask, start_indices, dimension_numbers=dimension_numbers,
-      slice_sizes=slice_sizes, **params)))
+      slice_sizes=slice_sizes, **params))))
 
 
 update_rules[lax.gather_p] = _gather_update
@@ -140,13 +140,13 @@ def _gather_static_update(
   start_indices = onp.reshape(onp.array(start_indices, dtype=int),
                               start_indices_shape)
   # Treat gather as a cheap op
-  return parray(
+  return Parray((
     lax.gather_p.bind(
       operand, start_indices, dimension_numbers=dimension_numbers,
       slice_sizes=slice_sizes, **params),
     onp.asarray(lax.gather_p.bind(
       operand_mask, start_indices, dimension_numbers=dimension_numbers,
-      slice_sizes=slice_sizes, **params)))
+      slice_sizes=slice_sizes, **params))))
 
 
 update_rules[lax.gather_static_p] = _gather_static_update
@@ -387,7 +387,7 @@ update_rules[lax.conv_general_dilated_p] = _conv_general_dilated_update
 
 def _device_put_update(old_out, x, **params):
   x, mask = x
-  return parray(xla.device_put_p.bind(x, **params), mask)
+  return Parray((xla.device_put_p.bind(x, **params), mask))
 
 
 update_rules[xla.device_put_p] = _device_put_update
