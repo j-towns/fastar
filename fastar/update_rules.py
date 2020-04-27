@@ -69,23 +69,6 @@ for op in _nops:
   update_rules[op] = _nop_update(op)
 
 
-# Logit and expit use custom_transforms so their primitives have a different
-# form.
-@curry
-def _logexpit_update(op, ans, x, **params):
-  x, x_mask = x
-  (ans, ans_mask), = ans
-  slices = mask_to_slices(x_mask & ~ ans_mask)
-  for s in slices:
-    part_x = x[_unbroadcast_slice(s, onp.shape(x))]
-    ans = index_update(ans, s, op.bind(part_x, **params)[0])
-  return [Parray((ans, x_mask))]
-
-
-for op in [special.expit.prim, special.logit.prim]:
-  update_rules[op] = _logexpit_update(op)
-
-
 # Cheap ops, these are assumed to require little or no computation
 @curry
 def _cheap_op_update(op, old_out, *args, **params):
@@ -131,25 +114,25 @@ def _gather_update(
 update_rules[lax.gather_p] = _gather_update
 
 
-def _gather_static_update(
-    old_out, operand, start_indices, start_indices_shape,
-    dimension_numbers,
-    slice_sizes, **params):
-  # Treat gather as a cheap op, but need to handle start_indices correctly
-  operand, operand_mask = operand
-  start_indices = onp.reshape(onp.array(start_indices, dtype=int),
-                              start_indices_shape)
-  # Treat gather as a cheap op
-  return Parray((
-    lax.gather_p.bind(
-      operand, start_indices, dimension_numbers=dimension_numbers,
-      slice_sizes=slice_sizes, **params),
-    onp.asarray(lax.gather_p.bind(
-      operand_mask, start_indices, dimension_numbers=dimension_numbers,
-      slice_sizes=slice_sizes, **params))))
+# def _gather_static_update(
+#     old_out, operand, start_indices, start_indices_shape,
+#     dimension_numbers,
+#     slice_sizes, **params):
+#   # Treat gather as a cheap op, but need to handle start_indices correctly
+#   operand, operand_mask = operand
+#   start_indices = onp.reshape(onp.array(start_indices, dtype=int),
+#                               start_indices_shape)
+#   # Treat gather as a cheap op
+#   return Parray((
+#     lax.gather_p.bind(
+#       operand, start_indices, dimension_numbers=dimension_numbers,
+#       slice_sizes=slice_sizes, **params),
+#     onp.asarray(lax.gather_p.bind(
+#       operand_mask, start_indices, dimension_numbers=dimension_numbers,
+#       slice_sizes=slice_sizes, **params))))
 
 
-update_rules[lax.gather_static_p] = _gather_static_update
+# update_rules[lax.gather_static_p] = _gather_static_update
 
 
 # Reductions

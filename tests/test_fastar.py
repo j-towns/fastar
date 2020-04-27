@@ -42,7 +42,7 @@ def is_subset(mask_1, mask_2):
 def check_ans(ans_old, ans):
   ans_old, mask_old = ans_old
   ans, mask = ans
-  assert isinstance(mask, (bool, np.bool_, np.ndarray))
+  assert isinstance(mask, (bool, onp.bool_, onp.ndarray))
   assert is_subset(mask_old, mask)
   assert is_subset(onp.bool_(ans), mask)
   assert np.all(np.where(mask_old, ans == ans_old, True))

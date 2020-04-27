@@ -57,7 +57,7 @@ def _get_update(p):
 
 
 # Populate the cache
-def _firstpass(jaxpr, consts, freevar_vals, args):
+def _firstpass(jaxpr, consts, args):
   def read(v):
     if type(v) is jc.Literal:
       return parray(v.val, true_mask(v.val))
@@ -76,27 +76,21 @@ def _firstpass(jaxpr, consts, freevar_vals, args):
   def write_subenvs(vs, env):
     subenvs[repr(vs)] = env
 
+  # Mapping from repr(var) to var's value. We use repr(var) because it is
+  # hashable, and we need env to be a valid pytree.
   env = {}
   subenvs = {}
 
   write(jc.unitvar, parray(jc.unit, true_mask(jc.unit)))
   map(write, jaxpr.constvars, consts)
   map(write, jaxpr.invars, args)
-  map(write, jaxpr.freevars, freevar_vals)
   for eqn in jaxpr.eqns:
     in_vals = map(read, eqn.invars)
-    if eqn.bound_subjaxprs:
-      subjaxprs, sub_consts, sub_freevar_vals = unzip3([(
-        subjaxpr,
-        map(read, const_vars),
-        map(read, bound_vars))
-        for subjaxpr, const_vars, bound_vars
-        in eqn.bound_subjaxprs])
-      ans, subenvs_ = _init_ans(eqn.primitive, eqn.params, subjaxprs,
-                                sub_consts, sub_freevar_vals, in_vals)
+    call_jaxpr, params = jc.extract_call_jaxpr(eqn.primitive, eqn.params)
+    if call_jaxpr:
+      ans, subenvs_ = _init_ans(eqn.primitive, params, call_jaxpr, in_vals)
       ans, subenvs_ = _get_update(eqn.primitive)(
-        eqn.params, subjaxprs, sub_consts, sub_freevar_vals, in_vals,
-        subenvs_)
+        params, call_jaxpr, in_vals, subenvs_)
 
       write_subenvs(tuple(eqn.outvars), subenvs_)
     else:
@@ -108,7 +102,6 @@ def _firstpass(jaxpr, consts, freevar_vals, args):
       write(eqn.outvars[0], ans)
   map(delete, jaxpr.constvars)
   map(delete, jaxpr.invars)
-  map(delete, jaxpr.freevars)
   return map(read, jaxpr.outvars), (env, subenvs)
 
 
@@ -135,7 +128,7 @@ def _call_init_rule(primitive, params, jaxpr, consts, freevar_vals, in_vals):
 init_rules[xla.xla_call_p] = partial(_call_init_rule, xla.xla_call_p)
 
 
-def _fastpass(jaxpr, consts, freevar_vals, args, old_env):
+def _fastpass(jaxpr, consts, args, old_env):
   old_env, old_subenvs = old_env
 
   def read(v):
@@ -173,25 +166,19 @@ def _fastpass(jaxpr, consts, freevar_vals, args, old_env):
   write(jc.unitvar, parray(jc.unit, true_mask(jc.unit)))
   map(write, jaxpr.constvars, consts)
   map(write, jaxpr.invars, args)
-  map(write, jaxpr.freevars, freevar_vals)
   for eqn in jaxpr.eqns:
     in_vals = map(read, eqn.invars)
+    call_jaxpr, params = jc.extract_call_jaxpr(eqn.primitive, eqn.params)
     old_outvals = map(read_old, eqn.outvars)
     if eqn.primitive.multiple_results:
       old_ans = old_outvals
     else:
       old_ans = old_outvals[0]
     in_vals = map(read, eqn.invars)
-    if eqn.bound_subjaxprs:
-      subjaxprs, sub_consts, sub_freevar_vals = unzip3([(
-        subjaxpr,
-        map(read, const_vars),
-        map(read, bound_vars))
-        for subjaxpr, const_vars, bound_vars in eqn.bound_subjaxprs])
+    if call_jaxpr:
       old_subenvs_ = read_old_subenvs(tuple(eqn.outvars))
       ans, subenvs_ = _get_update(eqn.primitive)(
-        eqn.params, subjaxprs, sub_consts, sub_freevar_vals, in_vals,
-        old_subenvs_)
+        params, call_jaxpr, in_vals, old_subenvs_)
       write_subenvs(tuple(eqn.outvars), subenvs_)
     else:
       ans = _get_update(eqn.primitive)(old_ans, *in_vals, **eqn.params)
@@ -201,7 +188,6 @@ def _fastpass(jaxpr, consts, freevar_vals, args, old_env):
       write(eqn.outvars[0], ans)
   map(delete, jaxpr.constvars)
   map(delete, jaxpr.invars)
-  map(delete, jaxpr.freevars)
   return map(read, jaxpr.outvars), (env, subenvs)
 
 
@@ -322,7 +308,7 @@ def _init_env(fun, args):
   avals = tuple(_get_aval(arg) for arg, _ in args_flat)
   jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
   consts = [parray(const, true_mask(const)) for const in consts]
-  ans, env = _firstpass(jaxpr, consts, [], args_flat)
+  ans, env = _firstpass(jaxpr, consts, args_flat)
   return tree_unflatten(out_tree, ans), env
 
 
@@ -334,5 +320,5 @@ def _update_env(fun, args, env):
   avals = tuple(_get_aval(arg) for arg, _ in args_flat)
   jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
   consts = [parray(const, true_mask(const)) for const in consts]
-  ans, env = _fastpass(jaxpr, consts, [], args_flat, env)
+  ans, env = _fastpass(jaxpr, consts, args_flat, env)
   return tree_unflatten(out_tree, ans), env
