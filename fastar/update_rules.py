@@ -334,14 +334,14 @@ def _conv_general_dilated_update_slice_op(
   return index_update(out, slc, new)
 
 
-def _conv_general_dilated_update(old_out, lhs, rhs, window_strides, padding,
-                                 lhs_dilation, rhs_dilation, dimension_numbers,
-                                 feature_group_count, lhs_shape, rhs_shape,
-                                 precision):
+def _conv_general_dilated_update(
+    old_out, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
+    dimension_numbers, feature_group_count, batch_group_count, lhs_shape,
+    rhs_shape, precision):
   lhs, lhs_mask = lhs
   rhs, rhs_mask = rhs
 
-  if not onp.all(rhs_mask) or feature_group_count > 1:
+  if not onp.all(rhs_mask) or feature_group_count > 1 or batch_group_count > 1:
     raise NotImplementedError
 
   outval, old_outmask = old_out

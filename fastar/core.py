@@ -73,7 +73,7 @@ def _firstpass(jaxpr, consts, args):
   def delete(v):
     del env[repr(v)]
 
-  def write_subenvs(vs, env):
+  def write_subenv(vs, env):
     subenvs[repr(vs)] = env
 
   # Mapping from repr(var) to var's value. We use repr(var) because it is
@@ -88,11 +88,11 @@ def _firstpass(jaxpr, consts, args):
     in_vals = map(read, eqn.invars)
     call_jaxpr, params = jc.extract_call_jaxpr(eqn.primitive, eqn.params)
     if call_jaxpr:
-      ans, subenvs_ = _init_ans(eqn.primitive, params, call_jaxpr, in_vals)
-      ans, subenvs_ = _get_update(eqn.primitive)(
-        params, call_jaxpr, in_vals, subenvs_)
+      ans, subenv = _init_ans(eqn.primitive, params, call_jaxpr, in_vals)
+      ans, subenv = _get_update(eqn.primitive)(
+        params, call_jaxpr, in_vals, subenv)
 
-      write_subenvs(tuple(eqn.outvars), subenvs_)
+      write_subenv(tuple(eqn.outvars), subenv)
     else:
       ans = _init_ans(eqn.primitive, *in_vals, **eqn.params)
       ans = _get_update(eqn.primitive)(ans, *in_vals, **eqn.params)
@@ -107,21 +107,18 @@ def _firstpass(jaxpr, consts, args):
 
 @lu.transformation_with_aux
 def _inited_fun(jaxpr, in_tree_def, *args):
-  consts, freevar_vals, args = tree_unflatten(in_tree_def, args)
-  out = yield (jaxpr, consts, freevar_vals, args), {}
-  out = out[0], (out[1],)  # Tuple of envs, not singleton env
+  args = tree_unflatten(in_tree_def, args)
+  out = yield (jaxpr, [], args), {}
+  # out = out[0], (out[1],)  # Tuple of envs, not singleton env
   out, out_treedef = tree_flatten(out)
   yield out, out_treedef
 
 
-def _call_init_rule(primitive, params, jaxpr, consts, freevar_vals, in_vals):
-  jaxpr, = jaxpr
-  consts, = consts
-  freevar_vals, = freevar_vals
-  all_args, in_treedef = tree_flatten((consts, freevar_vals, in_vals))
+def _call_init_rule(primitive, params, jaxpr, in_vals):
+  args, in_treedef = tree_flatten(in_vals)
   fun = lu.wrap_init(_firstpass)
   fun, out_treedef = _inited_fun(fun, jaxpr, in_treedef)
-  out = primitive.bind(fun, *all_args, **params)
+  out = primitive.bind(fun, *args, **params)
   return tree_unflatten(out_treedef(), out)
 
 
@@ -147,14 +144,14 @@ def _fastpass(jaxpr, consts, args, old_env):
       assert isinstance(val, Parray)
       return val
 
-  def read_old_subenvs(vs):
+  def read_old_subenv(vs):
     return old_subenvs[repr(vs)]
 
   def write(v, val):
     assert isinstance(val, Parray)
     env[repr(v)] = val
 
-  def write_subenvs(vs, env):
+  def write_subenv(vs, env):
     subenvs[repr(vs)] = env
 
   def delete(v):
@@ -176,10 +173,10 @@ def _fastpass(jaxpr, consts, args, old_env):
       old_ans = old_outvals[0]
     in_vals = map(read, eqn.invars)
     if call_jaxpr:
-      old_subenvs_ = read_old_subenvs(tuple(eqn.outvars))
-      ans, subenvs_ = _get_update(eqn.primitive)(
-        params, call_jaxpr, in_vals, old_subenvs_)
-      write_subenvs(tuple(eqn.outvars), subenvs_)
+      old_subenv = read_old_subenv(tuple(eqn.outvars))
+      ans, subenv = _get_update(eqn.primitive)(
+        params, call_jaxpr, in_vals, old_subenv)
+      write_subenv(tuple(eqn.outvars), subenv)
     else:
       ans = _get_update(eqn.primitive)(old_ans, *in_vals, **eqn.params)
     if eqn.primitive.multiple_results:
@@ -193,20 +190,15 @@ def _fastpass(jaxpr, consts, args, old_env):
 
 @lu.transformation_with_aux
 def _updated_fun(jaxpr, in_treedef, *args):
-  consts, freevar_vals, args, env = tree_unflatten(in_treedef, args)
-  out = yield (jaxpr, consts, freevar_vals, args, env), {}
-  out = out[0], (out[1],)  # Tuple of envs, not singleton env
+  args, env = tree_unflatten(in_treedef, args)
+  out = yield (jaxpr, [], args, env), {}
+  # out = out[0], (out[1],)  # Tuple of envs, not singleton env
   out, out_treedef = tree_flatten(out)
   yield out, out_treedef
 
 
-def _call_update_rule(
-    primitive, params, jaxpr, consts, freevar_vals, in_vals, env):
-  jaxpr, = jaxpr
-  consts, = consts
-  freevar_vals, = freevar_vals
-  env, = env
-  all_args, in_treedef = tree_flatten((consts, freevar_vals, in_vals, env))
+def _call_update_rule(primitive, params, jaxpr, in_vals, env):
+  all_args, in_treedef = tree_flatten((in_vals, env))
   fun = lu.wrap_init(_fastpass)
   fun, out_treedef = _updated_fun(fun, jaxpr, in_treedef)
   out = primitive.bind(fun, *all_args, **params)
@@ -296,7 +288,7 @@ def accelerate(fixed_point_fun, jit_every=10):
 def _fastar_jaxpr(fun, in_tree, in_avals):
   in_pvals = [pe.PartialVal((aval, jc.unit)) for aval in in_avals]
   fun_flat, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
-  jaxpr, _, consts = pe.trace_to_jaxpr(fun_flat, in_pvals)
+  jaxpr, _, consts = pe.trace_to_jaxpr(fun_flat, in_pvals, stage_out=True)
   return jaxpr, consts, out_tree()
 
 
@@ -309,6 +301,7 @@ def _init_env(fun, args):
   jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
   consts = [parray(const, true_mask(const)) for const in consts]
   ans, env = _firstpass(jaxpr, consts, args_flat)
+  # TODO(j-towns) could type-check ans
   return tree_unflatten(out_tree, ans), env
 
 
@@ -321,4 +314,5 @@ def _update_env(fun, args, env):
   jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
   consts = [parray(const, true_mask(const)) for const in consts]
   ans, env = _fastpass(jaxpr, consts, args_flat, env)
+  # TODO(j-towns) could type-check ans
   return tree_unflatten(out_tree, ans), env
