@@ -122,8 +122,8 @@ def test_slice():
     randn((7, 2, 1)))
 
 #   # def test_index():
-#   #   check(lambda x: 
-# 
+#   #   check(lambda x:
+#
 # TODO implement simultaneous negative + interior:
 # (((-1, -2, 2),), (5,)), (((-1, -2, 1), (1, 2, 2)), (4, 2)))
 @mark.parametrize('padding_config,shape',
@@ -150,24 +150,28 @@ def test_pad_vector(padding_config, shape):
          (("NCHW", "OIHW", "NCHW"), ((0, 1, 2, 3), (0, 1, 2, 3))),
          (("NHWC", "HWIO", "NHWC"), ((0, 2, 3, 1), (2, 3, 1, 0))),
          (("NCHW", "HWIO", "NHWC"), ((0, 1, 2, 3), (2, 3, 1, 0))))
-     # String padding is not implemented for transposed convolution, see conv_general_dilated implementation:
+     # String padding is not implemented for transposed convolution, see
+     # conv_general_dilated implementation:
      if lhs_dilation is None or not isinstance(padding, str)])
 def test_convolution(strides, padding, lhs_dilation, dimension_numbers,
                      lhs_perm, rhs_perm):
   lhs_shape = (1, 2, 4, 4)
   rhs_shape = (3, 2, 3, 2)
+
+  lhs = randn(onp.take(lhs_shape, lhs_perm))
+  rhs = randn(onp.take(rhs_shape, rhs_perm))
   check(
     lambda lhs: lax.conv_general_dilated(
-      lhs, randn(onp.take(rhs_shape, rhs_perm)), strides, padding,
-      lhs_dilation=lhs_dilation, dimension_numbers=dimension_numbers),
-    randn(onp.take(lhs_shape, lhs_perm)), rtol=1e-4, atol=1e-6)
-# 
+      lhs, rhs, strides, padding, lhs_dilation=lhs_dilation,
+      dimension_numbers=dimension_numbers),
+    lhs, rtol=1e-4, atol=1e-6)
+#
 #   def test_jit():
 #     check(jit(lambda x: x * 2), randn((1,)))
-# 
+#
 #   def test_jit_freevar():
 #     check(lambda x, y: jit(lambda x: x * y)(x), randn((1,)), randn((1,)))
-# 
+#
 #   def test_mask_to_slices():
 #     assert mask_to_slices(False) == []
 #     assert mask_to_slices(True) == [()]
