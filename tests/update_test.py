@@ -1,9 +1,10 @@
 from pytest import mark
 import numpy as onp
 
-import jax.lax as lax
 import jax.scipy.special as special
 import numpy as onp
+from jax import jit
+from jax import lax
 from absl.testing import parameterized
 
 from fastar.test_util import check
@@ -165,9 +166,9 @@ def test_convolution(strides, padding, lhs_dilation, dimension_numbers,
       lhs, rhs, strides, padding, lhs_dilation=lhs_dilation,
       dimension_numbers=dimension_numbers),
     lhs, rtol=1e-4, atol=1e-6)
-#
-#   def test_jit():
-#     check(jit(lambda x: x * 2), randn((1,)))
-#
-#   def test_jit_freevar():
-#     check(lambda x, y: jit(lambda x: x * y)(x), randn((1,)), randn((1,)))
+
+def test_jit():
+  check(jit(lambda x: x * 2), randn((1,)))
+
+def test_jit_freevar():
+  check(lambda x, y: jit(lambda x: x * y)(x), randn((1,)), randn((1,)))
