@@ -114,27 +114,6 @@ def _gather_update(
 update_rules[lax.gather_p] = _gather_update
 
 
-# def _gather_static_update(
-#     old_out, operand, start_indices, start_indices_shape,
-#     dimension_numbers,
-#     slice_sizes, **params):
-#   # Treat gather as a cheap op, but need to handle start_indices correctly
-#   operand, operand_mask = operand
-#   start_indices = onp.reshape(onp.array(start_indices, dtype=int),
-#                               start_indices_shape)
-#   # Treat gather as a cheap op
-#   return Parray((
-#     lax.gather_p.bind(
-#       operand, start_indices, dimension_numbers=dimension_numbers,
-#       slice_sizes=slice_sizes, **params),
-#     onp.asarray(lax.gather_p.bind(
-#       operand_mask, start_indices, dimension_numbers=dimension_numbers,
-#       slice_sizes=slice_sizes, **params))))
-
-
-# update_rules[lax.gather_static_p] = _gather_static_update
-
-
 # Reductions
 @curry
 def _reduce_update(op, ans, a, **params):
