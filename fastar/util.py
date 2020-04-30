@@ -14,17 +14,18 @@ def mask_all(parray):
   return onp.all(mask)
 
 
-class HashableMask(object):
-  def __init__(self, mask):
-    self.mask = mask
+class Hashable(object):
+  def __init__(self, val):
+    self.val = val
 
   def __hash__(self):
-    return hash(self.mask.tostring())
+    return id(self)
 
   def __eq__(self, other):
-    return onp.all(self.mask == other.mask)
+    return id(self) == id(other)
 
 
+# Utils for mapping a boolean index array to a list of slices
 def _to_tree(idxs):
   tree = {}
   for idx in idxs:

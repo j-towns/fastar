@@ -2,22 +2,27 @@ from contextlib import contextmanager
 from functools import reduce
 from operator import and_
 
+import numpy as onp
+
 import jax.core as jc
+from jax import abstract_arrays
+from jax.abstract_arrays import ShapedArray
+from jax import dtypes
 import jax.interpreters.partial_eval as pe
 import jax.lax as lax
 import jax.linear_util as lu
 import jax.scipy.special as special
 import numpy as onp
-from jax import numpy as np, abstract_arrays, jit as jit_
+from jax import numpy as np, jit as jit_
 from jax.ad_util import zeros_like_aval
 from jax.api_util import flatten_fun_nokwargs
-from .util import true_mask, false_mask, mask_all, HashableMask, mask_to_slices
+from .util import true_mask, false_mask, mask_all, Hashable, mask_to_slices
 from jax.interpreters import xla
 from jax.ops import index_update
 from jax.tree_util import (
-  tree_flatten, tree_unflatten, tree_map, Partial, register_pytree_node)
+  tree_flatten, tree_unflatten, tree_map, register_pytree_node)
 from jax.util import curry, safe_zip, safe_map
-from jax.util import partial, unzip3, cache
+from jax.util import partial, unzip2, cache
 
 map = safe_map
 zip = safe_zip
@@ -106,20 +111,24 @@ def _firstpass(jaxpr, consts, args):
 
 
 @lu.transformation_with_aux
-def _inited_fun(jaxpr, in_tree_def, *args):
-  args = tree_unflatten(in_tree_def, args)
+def _inited_fun(jaxpr, in_tree_def, knowns, *args):
+  knowns = [known.val for known in knowns]
+  args = tree_unflatten(in_tree_def, map(parray, args, knowns))
   out = yield (jaxpr, [], args), {}
-  # out = out[0], (out[1],)  # Tuple of envs, not singleton env
   out, out_treedef = tree_flatten(out)
-  yield out, out_treedef
+  out, out_known = unzip2(out)
+  yield out, (out_treedef, out_known)
 
 
 def _call_init_rule(primitive, params, jaxpr, in_vals):
   args, in_treedef = tree_flatten(in_vals)
+  args, knowns = unzip2(args)
+  knowns = tuple(map(Hashable, knowns))
   fun = lu.wrap_init(_firstpass)
-  fun, out_treedef = _inited_fun(fun, jaxpr, in_treedef)
+  fun, aux = _inited_fun(fun, jaxpr, in_treedef, knowns)
   out = primitive.bind(fun, *args, **params)
-  return tree_unflatten(out_treedef(), out)
+  out_treedef, out_known = aux()
+  return tree_unflatten(out_treedef, map(parray, out, out_known))
 
 
 init_rules[xla.xla_call_p] = partial(_call_init_rule, xla.xla_call_p)
@@ -189,20 +198,24 @@ def _fastpass(jaxpr, consts, args, old_env):
 
 
 @lu.transformation_with_aux
-def _updated_fun(jaxpr, in_treedef, *args):
-  args, env = tree_unflatten(in_treedef, args)
+def _updated_fun(jaxpr, in_treedef, knowns, *all_args):
+  knowns = [known.val for known in knowns]
+  args, env = tree_unflatten(in_treedef, map(parray, all_args, knowns))
   out = yield (jaxpr, [], args, env), {}
-  # out = out[0], (out[1],)  # Tuple of envs, not singleton env
   out, out_treedef = tree_flatten(out)
-  yield out, out_treedef
+  out, out_known = unzip2(out)
+  yield out, (out_treedef, out_known)
 
 
 def _call_update_rule(primitive, params, jaxpr, in_vals, env):
   all_args, in_treedef = tree_flatten((in_vals, env))
+  all_args, knowns = unzip2(all_args)
+  knowns = tuple(map(Hashable, knowns))
   fun = lu.wrap_init(_fastpass)
-  fun, out_treedef = _updated_fun(fun, jaxpr, in_treedef)
+  fun, aux = _updated_fun(fun, jaxpr, in_treedef, knowns)
   out = primitive.bind(fun, *all_args, **params)
-  return tree_unflatten(out_treedef(), out)
+  out_treedef, out_known = aux()
+  return tree_unflatten(out_treedef, map(parray, out, out_known))
 
 
 update_rules[xla.xla_call_p] = partial(_call_update_rule, xla.xla_call_p)
@@ -211,46 +224,14 @@ update_rules[xla.xla_call_p] = partial(_call_update_rule, xla.xla_call_p)
 class Parray(tuple):
   """
   Array which has been partially evaluated, represented by a pair
-      (arr, computed)
-  where `computed` is a boolean array with True where arr has been computed,
-  False where it hasn't yet. `arr` should be initialized to zeros so that
-  np.all(~computed & arr == 0).
+      (arr, known)
+  where `known` is a boolean array with True where arr has been computed, and
+  values are fixed.  False where it hasn't yet. `arr` should be initialized to
+  zeros so that np.all(~known & arr == 0).
   """
+  # TODO(j-towns): do we need to require uncomputed values to be zero?
   pass
-
-
-# This isn't a pytree node
-class ProtectedParray(Parray):
-  pass
-
-
-def _parray_to_iterable(parray):
-  if _protect_parrays_state:
-    return (ProtectedParray(parray),), None
-  else:
-    arr, mask = parray
-    return (arr,), HashableMask(mask)
-
-
-def _iterable_to_parray(mask, arr):
-  arr, = arr
-  if mask is None:
-    return arr
-  else:
-    return parray(arr, mask.mask)
-
-
 parray = lambda arr, mask: Parray((arr, mask))
-register_pytree_node(Parray, _parray_to_iterable, _iterable_to_parray)
-
-_protect_parrays_state = []
-
-
-@contextmanager
-def _protect_parrays():
-  _protect_parrays_state.append(None)
-  yield
-  _protect_parrays_state.pop()
 
 
 @cache()
@@ -262,10 +243,8 @@ def _fastar_jaxpr(fun, in_tree, in_avals):
 
 
 def _init_env(fun, args):
-  with _protect_parrays():
-    args_flat, in_tree = tree_flatten(args)
-  assert all(type(arg) is ProtectedParray for arg in args_flat)
-  args_flat = [Parray(arg) for arg in args_flat]
+  args_flat, in_tree = tree_flatten(args)
+  assert all(type(arg) is Parray for arg in args_flat)
   avals = tuple(_get_aval(arg) for arg, _ in args_flat)
   jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
   consts = [parray(const, true_mask(const)) for const in consts]
@@ -275,12 +254,11 @@ def _init_env(fun, args):
 
 
 def _update_env(fun, args, env):
-  with _protect_parrays():
-    args_flat, in_tree = tree_flatten(args)
-  assert all(type(arg) is ProtectedParray for arg in args_flat)
-  args_flat = [Parray(arg) for arg in args_flat]
+  args_flat, in_tree = tree_flatten(args)
+  assert all(type(arg) is Parray for arg in args_flat)
   avals = tuple(_get_aval(arg) for arg, _ in args_flat)
   jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
+  # TODO(j-towns): Shouldn't need to re-wrap consts here
   consts = [parray(const, true_mask(const)) for const in consts]
   ans, env = _fastpass(jaxpr, consts, args_flat, env)
   # TODO(j-towns) could type-check ans
