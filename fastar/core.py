@@ -253,37 +253,6 @@ def _protect_parrays():
   _protect_parrays_state.pop()
 
 
-## High level API
-def accelerate(fixed_point_fun, jit_every=10):
-  @jit_
-  def accelerated_start(fp_args, x):
-    fp = fixed_point_fun(*fp_args)
-    x = tree_map(lambda arr: parray(arr, false_mask(arr)), x)
-    x, env = _init_env(fp, [x])
-    i = 1
-    while not mask_all(x) and i < jit_every:
-      x, env = _update_env(fp, [x], env)
-      i = i + 1
-    if mask_all(x):
-      return x, None
-    else:
-      return x, Partial(accelerated_section, fp_args, env)
-
-  @jit_
-  def accelerated_section(fp_args, env, x):
-    fp = fixed_point_fun(*fp_args)
-    i = 0
-    while not mask_all(x) and i < jit_every:
-      x, env = _update_env(fp, [x], env)
-      i = i + 1
-    if mask_all(x):
-      return x, None
-    else:
-      return x, Partial(accelerated_section, fp_args, env)
-
-  return accelerated_start
-
-
 @cache()
 def _fastar_jaxpr(fun, in_tree, in_avals):
   in_pvals = [pe.PartialVal((aval, jc.unit)) for aval in in_avals]
@@ -316,3 +285,54 @@ def _update_env(fun, args, env):
   ans, env = _fastpass(jaxpr, consts, args_flat, env)
   # TODO(j-towns) could type-check ans
   return tree_unflatten(out_tree, ans), env
+
+
+## High level API
+def accelerate(fun):
+  """Accelerate the execution of `fun` when `fun` is called many times.
+
+  The input function is assumed to be part of a loop where intermediate values
+  are progressively evaluated, for example an autoregressive sampling loop. The
+  loop can be accelerated using elementwise partial evaluation. Before each call
+  to fun, each element of each array in *args is either 'known' or 'unknown'.
+  This state is indicated using a boolean mask, paired with each array. The pair
+  (arr, mask) must be wrapped in a `Parray`.
+
+  We require that each time fun is called, the inputs are at least as known as
+  the previous call, and that once an element is known its value cannot change.
+  Specifically if (arr_new, mask_new) are the current inputs and (arr_old,
+  mask_old) are the inputs to the previous call, we require that
+
+    1) mask_new >= mask_old                     (monotonically increasing mask)
+
+  and
+
+    2) all(arr_new[mask_old] == arr_old[mask_old])                (consistency)
+
+  Thus all intermediates can progressively become known (by updating elements of
+  a cache) and the outputs of the function also progressively become known. Each
+  element of the cache, and the outputs, are returned in Parray format (i.e. as
+  a pytree containing Parray(arr, mask) pairs.
+
+  Args:
+    fun: Function to be accelerated.
+
+  Returns:
+    A pair (init, update), both functions, init taking in *args which are the
+      same as the arguments for fun, but replacing each array with a Parray,
+      that is a pair (arr, mask), where mask indicates which values are 'known'.
+      init returns a pair (cache, out). The update takes arguments cache, *args,
+      with cache in the format returned by init, and args in the same format as
+      described for init. The update returns an updated (cache, out) pair.
+  """
+  def init(*args):
+    """
+    Initializes and performs first update, returning (output, cache).
+    """
+    return _init_env(fun, args)
+
+  def update(cache, *args):
+    """Returns updated (output, cache)."""
+    return _update_env(fun, args, cache)
+
+  return init, update

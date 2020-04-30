@@ -52,7 +52,7 @@ def check(fun, *args, rtol=1e-5, atol=1e-8, runs=2):
   rng = onp.random.RandomState(0)
   for _ in range(runs):
     ans = fun(*args)
-    fun_ac = accelerate_part(fun, jit=False)
+    fun_ac = accelerate(fun, jit=False)
     masks = increasing_masks(rng, *args)
     args_ = [Parray((arg, false_mask(arg))) for arg in args]
     ans_old, fun_ac = fun_ac(*args_)
@@ -65,7 +65,10 @@ def check(fun, *args, rtol=1e-5, atol=1e-8, runs=2):
     np_testing.assert_allclose(ans, ans_, rtol=rtol, atol=atol)
     assert ans.dtype == ans_.dtype
 
-def accelerate_part(fun, jit=True):
+def accelerate(fun, jit=True):
+  """
+  Similar to fastar.accelerate but with optional jit.
+  """
   def fast_fun(env, *args):
     ans, env = _update_env(fun, args, env)
     return ans, Partial(fast_fun, env)
