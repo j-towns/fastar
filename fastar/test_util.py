@@ -1,3 +1,4 @@
+from functools import partial
 import jax.lax as lax
 import jax.scipy.special as special
 import numpy as onp
@@ -8,7 +9,7 @@ from jax import test_util as jtu
 from fastar import Parray
 from fastar.core import _init_env, _update_env
 from fastar.util import false_mask, mask_to_slices
-from jax.tree_util import Partial
+from fastar.tree_util import tree_split, tree_parray
 from jax.util import safe_map, safe_zip
 
 jit_ = jit
@@ -52,7 +53,7 @@ def check(fun, *args, rtol=1e-5, atol=1e-8, runs=2):
   rng = onp.random.RandomState(0)
   for _ in range(runs):
     ans = fun(*args)
-    fun_ac = accelerate(fun, jit=False)
+    fun_ac = accelerate(fun, jit=True)
     masks = increasing_masks(rng, *args)
     args_ = [Parray((arg, false_mask(arg))) for arg in args]
     ans_old, fun_ac = fun_ac(*args_)
@@ -70,14 +71,25 @@ def accelerate(fun, jit=True):
   Similar to fastar.accelerate but with optional jit.
   """
   def fast_fun(env, *args):
-    ans, env = _update_env(fun, args, env)
-    return ans, Partial(fast_fun, env)
+    (env, args), known = tree_split((env, args))
+    out, out_known = fast_fun_(known, env, *args)
+    ans, env = tree_parray(out, out_known)
+    return ans, partial(fast_fun, env)
 
-  fast_fun = jit_(fast_fun) if jit else fast_fun
+  def fast_fun_(known, env, *args):
+    env, args = tree_parray((env, args), known)
+    return tree_split(_update_env(fun, args, env))
+
+  fast_fun_ = jit_(fast_fun_, static_argnums=0) if jit else fast_fun_
 
   def first_fun(*args):
-    ans, env = _init_env(fun, args)
-    return ans, Partial(fast_fun, env)
+    args, known = tree_split(args)
+    out, out_known = first_fun_(known, *args)
+    ans, env = tree_parray(out, out_known)
+    return ans, partial(fast_fun, env)
 
-  first_fun = jit_(first_fun) if jit else first_fun
+  def first_fun_(known, *args):
+    return tree_split(_init_env(fun, tree_parray(args, known)))
+
+  first_fun_ = jit_(first_fun_, static_argnums=0) if jit else first_fun_
   return first_fun

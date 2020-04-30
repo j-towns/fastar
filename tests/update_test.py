@@ -12,10 +12,10 @@ from fastar.test_util import check
 
 rng = onp.random.RandomState(0)
 
-randn   = lambda shape: rng.randn(*shape)
-randpos = lambda shape: onp.abs(rng.randn(*shape))
-randuniform = lambda shape: rng.rand(*shape)
-randbool = lambda shape: rng.randn(*shape) > rng.randn(*shape)
+randn   =     lambda shape: onp.float32(rng.randn(*shape))
+randpos =     lambda shape: onp.float32(onp.abs(rng.randn(*shape)))
+randuniform = lambda shape: onp.float32(rng.rand(*shape))
+randbool =    lambda shape: rng.randn(*shape) > rng.randn(*shape)
 
 
 # Unary elementwise operations
@@ -122,9 +122,8 @@ def test_slice():
         x, start_indices=(1, 1, 0), limit_indices=(2, 2, 1), strides=(2, 1, 1)),
     randn((7, 2, 1)))
 
-#   # def test_index():
-#   #   check(lambda x:
-#
+def test_index(): check(lambda x: x[0:2], randn((4,)))
+
 # TODO implement simultaneous negative + interior:
 # (((-1, -2, 2),), (5,)), (((-1, -2, 1), (1, 2, 2)), (4, 2)))
 @mark.parametrize('padding_config,shape',

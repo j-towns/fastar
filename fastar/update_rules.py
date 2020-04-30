@@ -257,7 +257,7 @@ def _pad_update(old_out, input, padding_value, padding_config):
   output_mask[unpad_slice] = cropped_input_mask
   if new_padding_value_mask:
     for s in pad_slices():
-      outval = index_update(outval, s, onp.broadcast_to(
+      outval = index_update(outval, s, np.broadcast_to(
         padding_value, output_mask[s].shape))
       output_mask[s] = True
 
