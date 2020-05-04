@@ -1,3 +1,4 @@
+from jax.core import Literal, Jaxpr, JaxprEqn, Var
 from functools import partial
 
 import numpy as onp
@@ -95,3 +96,37 @@ def mask_to_slices(mask):
     rectangles.append(rect)
     idx_tree = _remove_rectangle(idx_tree, rect)
   return [tuple(slice(s, e) for s, e in rect) for rect in rectangles]
+
+
+# Move constants inside jaxpr, i.e. make them into 'literals'
+def submerge_consts(jaxpr, consts, invals=None):
+  """
+  Replace constvars with literals in jaxpr and its sub-jaxprs.
+  """
+  # TODO(j-towns): check that consts are in jax.core.literalable_types
+  consts = dict(zip(jaxpr.constvars, consts))
+  if invals is not None:
+    # We're in a call_jaxpr
+    new_jaxpr_invars = []
+    for var, val in zip(jaxpr.invars, invals):
+      if isinstance(val, Var):
+        new_jaxpr_invars.append(var)
+      else:
+        consts[var] = val
+  else:
+    new_jaxpr_invars = jaxpr.invars
+  new_eqns = []
+  for eqn in jaxpr.eqns:
+    new_invars = [consts[var] if (isinstance(var, Var) and var in consts)
+                  else var for var in eqn.invars]
+    new_params = dict(eqn.params)
+    if eqn.primitive.call_primitive or eqn.primitive.map_primitive:
+      new_params['call_jaxpr'] = submerge_consts(eqn.params['call_jaxpr'], [],
+                                                 new_invars)
+      new_invars = [var for var in new_invars if isinstance(var, Var)]
+    else:
+      new_invars = [var if isinstance(var, (Var, Literal)) else Literal(var)
+                    for var in new_invars]
+    new_eqns.append(JaxprEqn(invars=new_invars, outvars=eqn.outvars,
+                             primitive=eqn.primitive, params=new_params))
+  return Jaxpr([], new_jaxpr_invars, jaxpr.outvars, new_eqns)
