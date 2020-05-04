@@ -2,6 +2,7 @@ from functools import reduce
 from operator import and_
 
 from jax import lax
+from jax.util import safe_map, safe_zip
 import jax.numpy as np
 from jax.scipy import special
 from jax.util import curry
@@ -13,6 +14,8 @@ import numpy as onp
 from fastar.core import update_rules, Parray
 from fastar.util import mask_to_slices
 
+map = safe_map
+zip = safe_zip
 
 def _unbroadcast_slice(s, shape):
   return tuple(s if dim_sz > 1 else slice(None)
@@ -57,6 +60,7 @@ _nops = [
   lax.ne_p,
   lax.neg_p,
   lax.not_p,
+  lax.or_p,
   lax.rem_p,
   lax.select_p,
   lax.sign_p,
