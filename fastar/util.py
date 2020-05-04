@@ -99,6 +99,27 @@ def mask_to_slices(mask):
 
 
 # Move constants inside jaxpr, i.e. make them into 'literals'
+# Need a custom literal class because jax.core.literal only supports scalars
+class Literal_(Literal):
+  __slots__ = ["val"]
+
+  def __init__(self, val):
+    self.val = val
+
+  @property
+  def aval(self):
+    return raise_to_shaped(get_aval(self.val))
+
+  def __hash__(self):
+    return id(self.val)
+
+  def __eq__(self, other):
+    return self.val is other.val
+
+  def __repr__(self):
+    return '{}'.format(self.val)
+
+
 def submerge_consts(jaxpr, consts, invals=None):
   """
   Replace constvars with literals in jaxpr and its sub-jaxprs.
@@ -125,7 +146,7 @@ def submerge_consts(jaxpr, consts, invals=None):
                                                  new_invars)
       new_invars = [var for var in new_invars if isinstance(var, Var)]
     else:
-      new_invars = [var if isinstance(var, (Var, Literal)) else Literal(var)
+      new_invars = [var if isinstance(var, (Var, Literal)) else Literal_(var)
                     for var in new_invars]
     new_eqns.append(JaxprEqn(invars=new_invars, outvars=eqn.outvars,
                              primitive=eqn.primitive, params=new_params))

@@ -40,9 +40,9 @@ def test_submerge_consts():
   let c = add a 2.0
       d = xla_call[ backend=None
                     call_jaxpr={ lambda  ; a.
-                                 let c = pow a Literal(val=[2. 3.])
+                                 let c = pow a [2. 3.]
                                  in (c,) }
                     device=None
                     name=f ] c
-      f = mul d Literal(val=[1. 3.])
+      f = mul d [1. 3.]
   in (f,) }"""

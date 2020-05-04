@@ -16,7 +16,8 @@ import numpy as onp
 from jax import numpy as np, jit as jit_
 from jax.ad_util import zeros_like_aval
 from jax.api_util import flatten_fun_nokwargs
-from .util import true_mask, false_mask, mask_all, Hashable, mask_to_slices
+from .util import (true_mask, false_mask, mask_all, Hashable, mask_to_slices,
+                   submerge_consts)
 from jax.interpreters import xla
 from jax.ops import index_update
 from jax.tree_util import (
@@ -64,7 +65,7 @@ def _get_update(p):
 # Populate the cache
 def _firstpass(jaxpr, consts, args):
   def read(v):
-    if type(v) is jc.Literal:
+    if isinstance(v, jc.Literal):
       return parray(v.val, true_mask(v.val))
     else:
       val = env[repr(v)]
@@ -138,7 +139,7 @@ def _fastpass(jaxpr, consts, args, old_env):
   old_env, old_subenvs = old_env
 
   def read(v):
-    if type(v) is jc.Literal:
+    if isinstance(v, jc.Literal):
       return parray(v.val, true_mask(v.val))
     else:
       val = env[repr(v)]
@@ -146,7 +147,7 @@ def _fastpass(jaxpr, consts, args, old_env):
       return val
 
   def read_old(v):
-    if type(v) is jc.Literal:
+    if isinstance(v, jc.Literal):
       return parray(v.val, true_mask(v.val))
     else:
       val = old_env[repr(v)]
@@ -239,7 +240,8 @@ def _fastar_jaxpr(fun, in_tree, in_avals):
   in_pvals = [pe.PartialVal((aval, jc.unit)) for aval in in_avals]
   fun_flat, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
   jaxpr, _, consts = pe.trace_to_jaxpr(fun_flat, in_pvals, stage_out=True)
-  return jaxpr, consts, out_tree()
+  jaxpr = submerge_consts(jaxpr, consts)
+  return jaxpr, [], out_tree()
 
 
 def _init_env(fun, args):
