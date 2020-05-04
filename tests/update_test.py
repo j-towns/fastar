@@ -172,3 +172,6 @@ def test_jit():
 
 def test_jit_freevar():
   check(lambda x, y: jit(lambda x: x * y)(x), randn((1,)), randn((1,)))
+
+def test_jit_indexing():
+  check(jit(lambda x: x[:2]), randn((4,)))
