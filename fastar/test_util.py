@@ -1,6 +1,7 @@
 from functools import partial
 import jax.lax as lax
 import jax.scipy.special as special
+from jax.tree_util import Partial
 import numpy as onp
 import numpy.testing as np_testing
 from absl.testing import parameterized
@@ -71,25 +72,14 @@ def accelerate(fun, jit=True):
   Similar to fastar.accelerate but with optional jit.
   """
   def fast_fun(env, *args):
-    (env, args), known = tree_split((env, args))
-    out, out_known = fast_fun_(known, env, *args)
-    ans, env = tree_parray(out, out_known)
-    return ans, partial(fast_fun, env)
+    ans, env = _update_env(fun, args, env)
+    return ans, Partial(fast_fun, env)
 
-  def fast_fun_(known, env, *args):
-    env, args = tree_parray((env, args), known)
-    return tree_split(_update_env(fun, args, env))
-
-  fast_fun_ = jit_(fast_fun_, static_argnums=0) if jit else fast_fun_
+  fast_fun = jit_(fast_fun) if jit else fast_fun
 
   def first_fun(*args):
-    args, known = tree_split(args)
-    out, out_known = first_fun_(known, *args)
-    ans, env = tree_parray(out, out_known)
-    return ans, partial(fast_fun, env)
+    ans, env = _init_env(fun, args)
+    return ans, Partial(fast_fun, env)
 
-  def first_fun_(known, *args):
-    return tree_split(_init_env(fun, tree_parray(args, known)))
-
-  first_fun_ = jit_(first_fun_, static_argnums=0) if jit else first_fun_
+  first_fun_ = jit_(first_fun, static_argnums=0) if jit else first_fun
   return first_fun

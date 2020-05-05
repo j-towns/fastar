@@ -1,9 +1,15 @@
+from jax import linear_util as lu
+from jax.tree_util import tree_unflatten, tree_flatten
+from jax.util import safe_map
 from jax.core import Literal, Jaxpr, JaxprEqn, Var
+from jax import tree_util
 from functools import partial
 
 import numpy as onp
 from jax import tree_util, unzip2
 
+
+map = safe_map
 
 def true_mask(val):
   return onp.full(onp.shape(val), True, dtype=bool)
@@ -28,6 +34,35 @@ class Hashable(object):
   def __eq__(self, other):
     return id(self) == id(other)
 
+def rewrap_parrays(treedef, flat):
+  """
+  Parrays are registered as pytree nodes so that they can pass transparently
+  through into jitted functions. This function re-wraps the values in the
+  tree-flattened 'flat' in their corresponding Parrays.
+  """
+  wrapped_flat = []
+  flat = flat[::-1]
+  def wrap(treedef):
+    if all(tree_util.treedef_is_leaf(child) for child in treedef.children()):
+      wrapped_flat.append(treedef.unflatten([flat.pop()]))
+    else:
+      for child in treedef.children():
+        wrap(child)
+  wrap(treedef)
+  return wrapped_flat
+
+class _DontWrap(object):
+  # Sometimes we want to unflatten without wrapping in a Parray
+  def __init__(self, arr):
+    self.val = arr
+
+@lu.transformation_with_aux
+def fastar_flatten_fun_nokwargs(in_tree, *args_flat):
+  # This is the same as jax.api_util.flatten_fun_no_kwargs, except that it will
+  # not wrap args in Parrays.
+  py_args = tree_unflatten(in_tree, map(_DontWrap, args_flat))
+  ans = yield py_args, {}
+  yield tree_flatten(ans)
 
 # Utils for mapping a boolean index array to a list of slices
 def _to_tree(idxs):

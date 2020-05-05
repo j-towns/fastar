@@ -15,9 +15,9 @@ import jax.scipy.special as special
 import numpy as onp
 from jax import numpy as np, jit as jit_
 from jax.ad_util import zeros_like_aval
-from jax.api_util import flatten_fun_nokwargs
 from .util import (true_mask, false_mask, mask_all, Hashable, mask_to_slices,
-                   submerge_consts)
+                   submerge_consts, _DontWrap, fastar_flatten_fun_nokwargs,
+                   rewrap_parrays)
 from jax.interpreters import xla
 from jax.ops import index_update
 from jax.tree_util import (
@@ -110,27 +110,18 @@ def _firstpass(jaxpr, consts, args):
   map(delete, jaxpr.invars)
   return map(read, jaxpr.outvars), (env, subenvs)
 
-
 @lu.transformation_with_aux
-def _inited_fun(jaxpr, in_tree_def, knowns, *args):
-  knowns = [known.val for known in knowns]
-  args = tree_unflatten(in_tree_def, map(parray, args, knowns))
+def _inited_fun(jaxpr, in_treedef, *args):
+  args = tree_unflatten(in_treedef, args)
   out = yield (jaxpr, [], args), {}
-  out, out_treedef = tree_flatten(out)
-  out, out_known = unzip2(out)
-  yield out, (out_treedef, out_known)
-
+  yield tree_flatten(out)
 
 def _call_init_rule(primitive, params, jaxpr, in_vals):
   args, in_treedef = tree_flatten(in_vals)
-  args, knowns = unzip2(args)
-  knowns = tuple(map(Hashable, knowns))
   fun = lu.wrap_init(_firstpass)
-  fun, aux = _inited_fun(fun, jaxpr, in_treedef, knowns)
+  fun, out_treedef = _inited_fun(fun, jaxpr, in_treedef)
   out = primitive.bind(fun, *args, **params)
-  out_treedef, out_known = aux()
-  return tree_unflatten(out_treedef, map(parray, out, out_known))
-
+  return tree_unflatten(out_treedef(), out)
 
 init_rules[xla.xla_call_p] = partial(_call_init_rule, xla.xla_call_p)
 
@@ -199,24 +190,19 @@ def _fastpass(jaxpr, consts, args, old_env):
 
 
 @lu.transformation_with_aux
-def _updated_fun(jaxpr, in_treedef, knowns, *all_args):
-  knowns = [known.val for known in knowns]
-  args, env = tree_unflatten(in_treedef, map(parray, all_args, knowns))
+def _updated_fun(jaxpr, in_treedef, *all_args):
+  args, env = tree_unflatten(in_treedef, all_args)
   out = yield (jaxpr, [], args, env), {}
   out, out_treedef = tree_flatten(out)
-  out, out_known = unzip2(out)
-  yield out, (out_treedef, out_known)
+  yield out, out_treedef
 
 
 def _call_update_rule(primitive, params, jaxpr, in_vals, env):
   all_args, in_treedef = tree_flatten((in_vals, env))
-  all_args, knowns = unzip2(all_args)
-  knowns = tuple(map(Hashable, knowns))
   fun = lu.wrap_init(_fastpass)
-  fun, aux = _updated_fun(fun, jaxpr, in_treedef, knowns)
+  fun, out_treedef = _updated_fun(fun, jaxpr, in_treedef)
   out = primitive.bind(fun, *all_args, **params)
-  out_treedef, out_known = aux()
-  return tree_unflatten(out_treedef, map(parray, out, out_known))
+  return tree_unflatten(out_treedef(), out)
 
 
 update_rules[xla.xla_call_p] = partial(_call_update_rule, xla.xla_call_p)
@@ -232,40 +218,47 @@ class Parray(tuple):
   """
   # TODO(j-towns): do we need to require uncomputed values to be zero?
   pass
-parray = lambda arr, mask: Parray((arr, mask))
+def _flatten_parray(parray):
+  arr, known = parray
+  return [arr], Hashable(known)
+def _unflatten_parray(known, arr):
+  arr, = arr
+  return parray(arr, known.val)
+register_pytree_node(Parray, _flatten_parray, _unflatten_parray)
 
+def parray(arr, known):
+  return arr.val if isinstance(arr, _DontWrap) else Parray((arr, known))
 
 @cache()
 def _fastar_jaxpr(fun, in_tree, in_avals):
   in_pvals = [pe.PartialVal((aval, jc.unit)) for aval in in_avals]
-  fun_flat, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
+  fun_flat, out_tree = fastar_flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
   jaxpr, _, consts = pe.trace_to_jaxpr(fun_flat, in_pvals, stage_out=True)
   jaxpr = submerge_consts(jaxpr, consts)
   return jaxpr, [], out_tree()
 
-
 def _init_env(fun, args):
   args_flat, in_tree = tree_flatten(args)
-  assert all(type(arg) is Parray for arg in args_flat)
-  avals = tuple(_get_aval(arg) for arg, _ in args_flat)
+  avals = tuple(map(_get_aval, args_flat))
   jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
+  args_flat = rewrap_parrays(in_tree, args_flat)
+  assert all(type(arg) is Parray for arg in args_flat)
   consts = [parray(const, true_mask(const)) for const in consts]
   ans, env = _firstpass(jaxpr, consts, args_flat)
   # TODO(j-towns) could type-check ans
   return tree_unflatten(out_tree, ans), env
 
-
 def _update_env(fun, args, env):
   args_flat, in_tree = tree_flatten(args)
-  assert all(type(arg) is Parray for arg in args_flat)
-  avals = tuple(_get_aval(arg) for arg, _ in args_flat)
+  avals = tuple(map(_get_aval, args_flat))
   jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
+  args_flat = rewrap_parrays(in_tree, args_flat)
+  assert all(type(arg) is Parray for arg in args_flat)
   # TODO(j-towns): Shouldn't need to re-wrap consts here
   consts = [parray(const, true_mask(const)) for const in consts]
   ans, env = _fastpass(jaxpr, consts, args_flat, env)
   # TODO(j-towns) could type-check ans
   return tree_unflatten(out_tree, ans), env
-
 
 ## High level API
 def accelerate(fun):
