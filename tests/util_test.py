@@ -32,8 +32,8 @@ def test_submerge_consts():
 
 
   args = (core.parray(np.array([1., 2.]), onp.array([True, True])),)
-  args_flat, in_tree = tree_flatten(args)
-  avals = tuple(map(core._get_aval, args_flat))
+  args_flat, in_tree = util.fastar_tree_flatten(args)
+  avals = tuple(core._get_aval(arg) for arg, _ in args_flat)
   jaxpr, consts, out_tree = core._fastar_jaxpr(g, in_tree, avals)
   assert repr(jaxpr) == """{ lambda  ; a.
   let c = add a 2.0

@@ -34,7 +34,7 @@ class Hashable(object):
   def __eq__(self, other):
     return id(self) == id(other)
 
-def rewrap_parrays(treedef, flat):
+def _rewrap_parrays(treedef, flat):
   """
   Parrays are registered as pytree nodes so that they can pass transparently
   through into jitted functions. This function re-wraps the values in the
@@ -56,13 +56,15 @@ class _DontWrap(object):
   def __init__(self, arr):
     self.val = arr
 
-@lu.transformation_with_aux
-def fastar_flatten_fun_nokwargs(in_tree, *args_flat):
-  # This is the same as jax.api_util.flatten_fun_no_kwargs, except that it will
-  # not wrap args in Parrays.
-  py_args = tree_unflatten(in_tree, map(_DontWrap, args_flat))
-  ans = yield py_args, {}
-  yield tree_flatten(ans)
+def fastar_tree_flatten(tree):
+  """
+  Same as jax.tree_util.tree_flatten except that Parrays are left unflattened.
+  """
+  flat_raw, treedef_raw = tree_flatten(tree)
+  _, treedef = tree_flatten(
+      tree_unflatten(treedef_raw, map(_DontWrap, flat_raw)))
+  return _rewrap_parrays(treedef_raw, flat_raw), treedef
+
 
 # Utils for mapping a boolean index array to a list of slices
 def _to_tree(idxs):

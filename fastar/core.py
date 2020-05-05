@@ -16,12 +16,12 @@ import numpy as onp
 from jax import numpy as np, jit as jit_
 from jax.ad_util import zeros_like_aval
 from .util import (true_mask, false_mask, mask_all, Hashable, mask_to_slices,
-                   submerge_consts, _DontWrap, fastar_flatten_fun_nokwargs,
-                   rewrap_parrays)
+                   submerge_consts, _DontWrap, fastar_tree_flatten)
 from jax.interpreters import xla
 from jax.ops import index_update
 from jax.tree_util import (
-  tree_flatten, tree_unflatten, tree_map, register_pytree_node)
+  tree_flatten, tree_unflatten, tree_map, register_pytree_node, Partial)
+from jax.api_util import flatten_fun_nokwargs
 from jax.util import curry, safe_zip, safe_map
 from jax.util import partial, unzip2, cache
 
@@ -232,28 +232,26 @@ def parray(arr, known):
 @cache()
 def _fastar_jaxpr(fun, in_tree, in_avals):
   in_pvals = [pe.PartialVal((aval, jc.unit)) for aval in in_avals]
-  fun_flat, out_tree = fastar_flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
+  fun_flat, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
   jaxpr, _, consts = pe.trace_to_jaxpr(fun_flat, in_pvals, stage_out=True)
   jaxpr = submerge_consts(jaxpr, consts)
   return jaxpr, [], out_tree()
 
 def _init_env(fun, args):
-  args_flat, in_tree = tree_flatten(args)
-  avals = tuple(map(_get_aval, args_flat))
-  jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
-  args_flat = rewrap_parrays(in_tree, args_flat)
+  args_flat, in_tree = fastar_tree_flatten(args)
   assert all(type(arg) is Parray for arg in args_flat)
+  avals = tuple(_get_aval(arg) for arg, _ in args_flat)
+  jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
   consts = [parray(const, true_mask(const)) for const in consts]
   ans, env = _firstpass(jaxpr, consts, args_flat)
   # TODO(j-towns) could type-check ans
   return tree_unflatten(out_tree, ans), env
 
 def _update_env(fun, args, env):
-  args_flat, in_tree = tree_flatten(args)
-  avals = tuple(map(_get_aval, args_flat))
-  jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
-  args_flat = rewrap_parrays(in_tree, args_flat)
+  args_flat, in_tree = fastar_tree_flatten(args)
   assert all(type(arg) is Parray for arg in args_flat)
+  avals = tuple(_get_aval(arg) for arg, _ in args_flat)
+  jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
   # TODO(j-towns): Shouldn't need to re-wrap consts here
   consts = [parray(const, true_mask(const)) for const in consts]
   ans, env = _fastpass(jaxpr, consts, args_flat, env)
@@ -300,12 +298,16 @@ def accelerate(fun):
   """
   def init(*args):
     """
-    Initializes and performs first update, returning (output, cache).
+    Initializes and performs first update, returning (output, update_fun).
     """
-    return _init_env(fun, args)
+    ans, cache =  _init_env(fun, args)
+    return ans, Partial(update, cache)
 
   def update(cache, *args):
-    """Returns updated (output, cache)."""
-    return _update_env(fun, args, cache)
+    """Returns updated (output, update_fun)."""
+    # TODO(j-towns): check that knowns are greater than or equal to previous
+    # update
+    ans, cache = _update_env(fun, args, cache)
+    return ans, Partial(update, cache)
 
-  return init, update
+  return init
