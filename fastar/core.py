@@ -298,16 +298,14 @@ def accelerate(fun):
   """
   def init(*args):
     """
-    Initializes and performs first update, returning (output, update_fun).
+    Initializes and performs first update, returning (output, cache).
     """
-    ans, cache =  _init_env(fun, args)
-    return ans, Partial(update, cache)
+    return _init_env(fun, args)
 
   def update(cache, *args):
-    """Returns updated (output, update_fun)."""
+    """Returns updated (output, cache)."""
     # TODO(j-towns): check that knowns are greater than or equal to previous
     # update
-    ans, cache = _update_env(fun, args, cache)
-    return ans, Partial(update, cache)
+    return _update_env(fun, args, cache)
 
-  return init
+  return init, update
