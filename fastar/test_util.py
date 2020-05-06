@@ -10,7 +10,6 @@ from jax import test_util as jtu
 from fastar import Parray
 from fastar.core import _init_env, _update_env
 from fastar.util import false_mask, mask_to_slices
-from fastar.tree_util import tree_split, tree_parray
 from jax.util import safe_map, safe_zip
 
 jit_ = jit
