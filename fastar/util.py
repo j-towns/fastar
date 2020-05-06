@@ -29,10 +29,13 @@ class Hashable(object):
     self.val = val
 
   def __hash__(self):
-    return id(self)
+    # We hash known boolean masks on their id because hashing on value is
+    # probably too slow, and id should be fine grained enough to get cache hits
+    # in most use cases.
+    return id(self.val)
 
   def __eq__(self, other):
-    return id(self) == id(other)
+    return id(self.val) == id(other.val)
 
 def _rewrap_parrays(treedef, flat):
   """
