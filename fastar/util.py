@@ -3,6 +3,7 @@ from jax.tree_util import tree_unflatten, tree_flatten
 from jax.util import safe_map
 from jax.core import Literal, Jaxpr, JaxprEqn, Var
 from jax import tree_util
+import jax.core as jc
 from functools import partial
 
 import numpy as onp
@@ -178,16 +179,33 @@ def submerge_consts(jaxpr, consts, invals=None):
     new_jaxpr_invars = jaxpr.invars
   new_eqns = []
   for eqn in jaxpr.eqns:
-    new_invars = [consts[var] if (isinstance(var, Var) and var in consts)
-                  else var for var in eqn.invars]
-    new_params = dict(eqn.params)
-    if eqn.primitive.call_primitive or eqn.primitive.map_primitive:
-      new_params['call_jaxpr'] = submerge_consts(eqn.params['call_jaxpr'], [],
-                                                 new_invars)
-      new_invars = [var for var in new_invars if isinstance(var, Var)]
+    if all(isinstance(var, Literal) or var in consts for var in eqn.invars):
+      # Perform constant folding if all inputs to an eqn are known
+      in_vals = [var.val if isinstance(var, Literal) else consts[var]
+                 for var in eqn.invars]
+      call_jaxpr, params = jc.extract_call_jaxpr(eqn.primitive, eqn.params)
+      if call_jaxpr:
+        subfuns = [lu.wrap_init(partial(jc.eval_jaxpr, call_jaxpr, ()))]
+      else:
+        subfuns = []
+      ans = eqn.primitive.bind(*(subfuns + in_vals), **params)
+      if eqn.primitive.multiple_results:
+        for outvar, out in zip(eqn.outvars, ans):
+          consts[outvar] = out
+      else:
+        outvar, = eqn.outvars
+        consts[outvar] = ans
     else:
-      new_invars = [var if isinstance(var, (Var, Literal)) else Literal_(var)
-                    for var in new_invars]
-    new_eqns.append(JaxprEqn(invars=new_invars, outvars=eqn.outvars,
-                             primitive=eqn.primitive, params=new_params))
+      new_invars = [consts[var] if (isinstance(var, Var) and var in consts)
+                    else var for var in eqn.invars]
+      new_params = dict(eqn.params)
+      if eqn.primitive.call_primitive or eqn.primitive.map_primitive:
+        new_params['call_jaxpr'] = submerge_consts(eqn.params['call_jaxpr'], [],
+                                                   new_invars)
+        new_invars = [var for var in new_invars if isinstance(var, Var)]
+      else:
+        new_invars = [var if isinstance(var, (Var, Literal)) else Literal_(var)
+                      for var in new_invars]
+      new_eqns.append(JaxprEqn(invars=new_invars, outvars=eqn.outvars,
+                               primitive=eqn.primitive, params=new_params))
   return Jaxpr([], new_jaxpr_invars, jaxpr.outvars, new_eqns)

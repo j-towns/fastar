@@ -45,3 +45,30 @@ def test_submerge_consts():
                     name=f ] c
       f = mul d [1. 3.]
   in (f,) }"""
+
+def test_submerge_consts_with_folding():
+  @jit
+  def f(x, y):
+    return y + x ** np.array([3., 3.])
+
+  def g(x):
+    y = x + 2.
+    y = f(y, 2)
+    return y * np.array([1., 3.])
+
+
+  args = (core.parray(np.array([1., 2.]), onp.array([True, True])),)
+  args_flat, in_tree = util.fastar_tree_flatten(args)
+  avals = tuple(core._get_aval(arg) for arg, _ in args_flat)
+  jaxpr, consts, out_tree = core._fastar_jaxpr(g, in_tree, avals)
+  assert repr(jaxpr) == """{ lambda  ; a.
+  let c = add a 2.0
+      e = xla_call[ backend=None
+                    call_jaxpr={ lambda  ; a.
+                                 let e = pow a [3. 3.]
+                                     f = add 2.0 e
+                                 in (f,) }
+                    device=None
+                    name=f ] c
+      g = mul e [1. 3.]
+  in (g,) }"""

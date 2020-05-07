@@ -1,3 +1,5 @@
+from functools import partial
+
 from pytest import mark
 import numpy as onp
 
@@ -175,3 +177,6 @@ def test_jit_freevar():
 
 def test_jit_indexing():
   check(jit(lambda x: x[:2]), randn((4,)))
+
+def test_jit_indexing_closure():
+  check(jit(lambda x: x[onp.array([2])]), randn((4,)))
