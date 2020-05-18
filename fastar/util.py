@@ -1,13 +1,13 @@
 from jax import linear_util as lu
 from jax.tree_util import tree_unflatten, tree_flatten
-from jax.util import safe_map
+from jax.util import safe_map, unzip2
 from jax.core import Literal, Jaxpr, JaxprEqn, Var
 from jax import tree_util
 import jax.core as jc
 from functools import partial
 
 import numpy as onp
-from jax import tree_util, unzip2
+from jax import tree_util
 
 
 map = safe_map
