@@ -292,9 +292,9 @@ def accelerate(fun):
     A pair (init, update), both functions, init taking in *args which are the
       same as the arguments for fun, but replacing each array with a Parray,
       that is a pair (arr, mask), where mask indicates which values are 'known'.
-      init returns a pair (cache, out). The update takes arguments cache, *args,
+      init returns a pair (out, cache). The update takes arguments cache, *args,
       with cache in the format returned by init, and args in the same format as
-      described for init. The update returns an updated (cache, out) pair.
+      described for init. The update returns an updated (out, cache) pair.
   """
   def init(*args):
     """
