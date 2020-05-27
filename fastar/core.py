@@ -108,6 +108,7 @@ def _firstpass(jaxpr, consts, args):
       write(eqn.outvars[0], ans)
   map(delete, jaxpr.constvars)
   map(delete, jaxpr.invars)
+  delete(jc.unitvar)
   return map(read, jaxpr.outvars), (env, subenvs)
 
 @lu.transformation_with_aux
@@ -186,6 +187,7 @@ def _fastpass(jaxpr, consts, args, old_env):
       write(eqn.outvars[0], ans)
   map(delete, jaxpr.constvars)
   map(delete, jaxpr.invars)
+  delete(jc.unitvar)
   return map(read, jaxpr.outvars), (env, subenvs)
 
 
