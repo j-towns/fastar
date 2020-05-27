@@ -1,5 +1,6 @@
 from functools import reduce
 from operator import and_
+from warnings import warn
 
 from jax import lax
 from jax.util import safe_map, safe_zip
@@ -8,6 +9,7 @@ from jax.scipy import special
 from jax.util import curry
 from jax.interpreters import xla
 from jax.ops import index_update
+from jax.core import Tracer
 
 import numpy as onp
 
@@ -268,13 +270,24 @@ def _pad_update(old_out, input, padding_value, padding_config):
 
 update_rules[lax.pad_p] = _pad_update
 
+def _filter_nonzero(arr):
+  # We attempt to automatically detect where zeros are in conv filters in order
+  # to support masked convolution.
+  if isinstance(arr, Tracer):
+    warn("Unable to detect locations of zeros in conv filter. If you're using "
+         "masked convolution with FastAR you need to ensure that the filter "
+         "has no dependence on the input to the accelerated function.")
+    nonzero = onp.zeros(arr.shape)
+  else:
+    nonzero = onp.asarray(arr != 0)
+  return nonzero
 
-def _conv_general_dilated_outmask(lhs_mask, rhs_mask, **params):
+def _conv_general_dilated_outmask(lhs_mask, rhs_nonzero, **params):
   # Note: we assume that rhs_mask doesn't change
-  lhs_mask, rhs_mask = onp.float32(lhs_mask), onp.float32(rhs_mask)
-  out = onp.array(lax.conv_general_dilated(lhs_mask, rhs_mask, **params))
+  lhs_mask, rhs_nonzero = onp.float32(lhs_mask), onp.float32(rhs_nonzero)
+  out = onp.array(lax.conv_general_dilated(lhs_mask, rhs_nonzero, **params))
   full_out = onp.array(lax.conv_general_dilated(
-    onp.ones_like(lhs_mask), onp.ones_like(rhs_mask), **params))
+    onp.ones_like(lhs_mask), rhs_nonzero, **params))
   return out == full_out
 
 
@@ -282,6 +295,7 @@ def _conv_general_dilated_update_slice_op(
     slc, out, lhs, rhs, window_strides, padding,
     lhs_dilation=None, rhs_dilation=None, dimension_numbers=None,
     precision=None):
+  # TODO: use rhs zero locations to avoid unnecessary computation
   lhs_spec, rhs_spec, out_spec = dimension_numbers
   lhs_shape = onp.take(onp.shape(lhs), lhs_spec)
   rhs_shape = onp.take(onp.shape(rhs), rhs_spec)
@@ -330,14 +344,9 @@ def _conv_general_dilated_update(
   outval, old_outmask = old_out
 
   outmask = _conv_general_dilated_outmask(
-    lhs_mask, rhs_mask, window_strides=window_strides, padding=padding,
-    lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
+    lhs_mask, _filter_nonzero(rhs), window_strides=window_strides,
+    padding=padding, lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
     dimension_numbers=dimension_numbers)
-
-  # if dimension_numbers is not None:
-  #   assert dimension_numbers.lhs_spec == tuple(range(np.ndim(lhs)))
-  #   assert dimension_numbers.rhs_spec == tuple(range(np.ndim(rhs)))
-  #   assert dimension_numbers.out_spec == tuple(range(np.ndim(outval)))
 
   new_mask = outmask & ~old_outmask
   for slice in mask_to_slices(new_mask):
