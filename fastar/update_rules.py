@@ -198,8 +198,11 @@ def _reduce_update(op, ans, a, **params):
 
 
 reduce_ops = [
+  lax.reduce_and_p ,
   lax.reduce_max_p,
   lax.reduce_min_p,
+  lax.reduce_or_p ,
+  lax.reduce_prod_p,
   lax.reduce_sum_p,
 ]
 
