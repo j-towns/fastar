@@ -53,7 +53,7 @@ def _update_slice(arr, slc, new):
 
 # n-ary elementwise operators with broadcasting
 @curry
-def _nop_update(op, ans, *args):
+def _naryop_update(op, ans, *args):
   args, arg_masks = zip(*args)
   args = map(np.asarray, args)
   ans, ans_mask = ans
@@ -65,41 +65,72 @@ def _nop_update(op, ans, *args):
   return Parray((ans, new_ans_mask))
 
 
-_nops = [
-  lax.abs_p,
-  lax.add_p,
-  lax.and_p,
-  lax.ceil_p,
-  lax.cos_p,
-  lax.div_p,
-  lax.eq_p,
-  lax.exp_p,
-  lax.expm1_p,
-  lax.floor_p,
-  lax.ge_p,
-  lax.gt_p,
-  lax.is_finite_p,
-  lax.le_p,
-  lax.log_p,
-  lax.log1p_p,
-  lax.lt_p,
-  lax.max_p,
-  lax.min_p,
-  lax.mul_p,
-  lax.ne_p,
-  lax.neg_p,
-  lax.not_p,
-  lax.or_p,
-  lax.rem_p,
-  lax.select_p,
-  lax.sign_p,
-  lax.sin_p,
-  lax.sub_p,
-  lax.tanh_p,
+_naryops = [
+    lax.lt_p,
+    lax.le_p,
+    lax.gt_p,
+    lax.ge_p,
+    lax.ne_p,
+    lax.eq_p,
+    lax.shift_right_logical_p,
+    lax.shift_right_arithmetic_p,
+    lax.shift_left_p,
+    lax.min_p,
+    lax.max_p,
+    lax.rem_p,
+    lax.div_p,
+    lax.mul_p,
+    lax.sub_p,
+    lax.add_p,
+    lax.population_count_p,
+    lax.xor_p,
+    lax.or_p,
+    lax.and_p,
+    lax.not_p,
+    lax.pow_p,
+    lax.rsqrt_p,
+    lax.sqrt_p,
+    lax.abs_p,
+    lax.conj_p,
+    lax.complex_p,
+    lax.imag_p,
+    lax.real_p,
+    lax.erf_inv_p,
+    lax.erfc_p,
+    lax.erf_p,
+    lax.bessel_i1e_p,
+    lax.bessel_i0e_p,
+    lax.igammac_p,
+    lax.igamma_grad_a_p,
+    lax.igamma_p,
+    lax.digamma_p,
+    lax.lgamma_p,
+    lax.regularized_incomplete_beta_p,
+    lax.atanh_p,
+    lax.acosh_p,
+    lax.asinh_p,
+    lax.cosh_p,
+    lax.sinh_p,
+    lax.atan2_p,
+    lax.cos_p,
+    lax.sin_p,
+    lax.tanh_p,
+    lax.log1p_p,
+    lax.expm1_p,
+    lax.log_p,
+    lax.exp_p,
+    lax.is_finite_p,
+    lax.round_p,
+    lax.ceil_p,
+    lax.floor_p,
+    lax.nextafter_p,
+    lax.sign_p,
+    lax.neg_p,
+    lax.select_p,
 ]
 
-for op in _nops:
-  update_rules[op] = _nop_update(op)
+for op in _naryops:
+  update_rules[op] = _naryop_update(op)
 
 
 # Cheap ops, these are assumed to require little or no computation
