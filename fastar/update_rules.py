@@ -21,8 +21,35 @@ zip = safe_zip
 
 def _unbroadcast_slice(s, shape):
   return tuple(s if dim_sz > 1 else slice(None)
-               for s, dim_sz in zip(s[len(s) - len(shape):], shape))
+               for s, dim_sz in zip(s, shape)) if shape else ()
 
+def _slice(arr, slc):
+  # We use lax.slice when possible because it simplifies jaxprs and seems to be
+  # a bit faster to compile/run than gather, at least on CPU.
+  assert type(slc) is tuple and len(slc) == arr.ndim
+  starts = []
+  stops  = []
+  steps  = []
+  for s, dim_sz in zip(slc, arr.shape):
+    starts.append(0      if s.start is None else s.start)
+    stops. append(dim_sz if s.stop  is None else s.stop )
+    steps. append(1      if s.step  is None else s.step )
+  return lax.slice(arr, starts, stops, steps)
+
+def _update_slice(arr, slc, new):
+  # We use lax.dynamic_update_slice when possible because it simplifies jaxprs
+  # and seems to be a bit faster to compile/run than index_update, at least on
+  # CPU.
+  assert type(slc) is tuple and len(slc) == arr.ndim
+  starts = []
+  stops  = []
+  steps  = []
+  for s, dim_sz in zip(slc, arr.shape):
+    starts.append(0      if s.start is None else s.start)
+    stops. append(dim_sz if s.stop  is None else s.stop )
+    assert s.step is None or s.step == 1
+  assert new.shape == tuple(onp.subtract(stops, starts))
+  return lax.dynamic_update_slice(arr, new, np.array(starts))
 
 # n-ary elementwise operators with broadcasting
 @curry
@@ -33,8 +60,8 @@ def _nop_update(op, ans, *args):
   new_ans_mask = reduce(and_, arg_masks)
   slices = mask_to_slices(new_ans_mask & ~ ans_mask)
   for s in slices:
-    part_args = [a[_unbroadcast_slice(s, onp.shape(a))] for a in args]
-    ans = index_update(ans, s, op.bind(*part_args))
+    part_args = [_slice(a, _unbroadcast_slice(s, onp.shape(a))) for a in args]
+    ans = _update_slice(ans, s, op.bind(*part_args))
   return Parray((ans, new_ans_mask))
 
 
@@ -132,10 +159,10 @@ def _reduce_update(op, ans, a, **params):
     a_slice = list(s)
     for axis in axes:
       a_slice.insert(axis, slice(None))
-    a_part = a[tuple(a_slice)]
+    a_part = _slice(a, tuple(a_slice))
     if 'input_shape' in params:
       params['input_shape'] = onp.shape(a_part)
-    ans = index_update(ans, s, op.bind(a_part, **params))
+    ans = _update_slice(ans, s, op.bind(a_part, **params))
   return Parray((ans, new_ans_mask))
 
 
@@ -186,9 +213,9 @@ def _dot_general_update(ans, a, b, dimension_numbers, precision=None):
                     onp.argsort(a_btch_dims + a_outr_dims + a_cont_dims))
     b_slice = tuple((s_btch + s_b + cont_ndim * (slice(None),))[d] for d in
                     onp.argsort(b_btch_dims + b_outr_dims + b_cont_dims))
-    ansval = index_update(ansval, s,
+    ansval = _update_slice(ansval, s,
                           lax.dot_general_p.bind(
-                            a[a_slice], b[b_slice],
+                            _slice(a, a_slice), _slice(b, b_slice),
                             dimension_numbers=dimension_numbers,
                             precision=precision))
   return Parray((ansval, new_ansmask))
@@ -324,11 +351,11 @@ def _conv_general_dilated_update_slice_op(
                tuple(slice(int(s), int(e)) for s, e in
                      zip(lhs_start, lhs_stop)))
   new = lax.conv_general_dilated(
-    lhs[tuple(onp.take(lhs_slice, onp.argsort(lhs_spec)))], rhs,
+    _slice(lhs, tuple(onp.take(lhs_slice, onp.argsort(lhs_spec)))), rhs,
     window_strides=window_strides, padding=sub_padding,
     lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
     dimension_numbers=dimension_numbers, precision=precision)
-  return index_update(out, slc, new)
+  return _update_slice(out, slc, new)
 
 
 def _conv_general_dilated_update(
@@ -358,11 +385,3 @@ def _conv_general_dilated_update(
 
 
 update_rules[lax.conv_general_dilated_p] = _conv_general_dilated_update
-
-
-def _device_put_update(old_out, x, **params):
-  x, mask = x
-  return Parray((xla.device_put_p.bind(x, **params), mask))
-
-
-update_rules[xla.device_put_p] = _device_put_update
