@@ -338,14 +338,14 @@ def _filter_nonzero(arr):
     warn("Unable to detect locations of zeros in conv filter. If you're using "
          "masked convolution with FastAR you need to ensure that the filter "
          "has no dependence on the input to the accelerated function.")
-    nonzero = onp.zeros(arr.shape)
+    nonzero = np.zeros(arr.shape)
   else:
-    nonzero = onp.asarray(arr != 0)
+    nonzero = arr != 0
   return nonzero
 
 def _conv_general_dilated_outmask(lhs_mask, rhs_nonzero, **params):
   # Note: we assume that rhs_mask doesn't change
-  lhs_mask, rhs_nonzero = onp.float32(lhs_mask), onp.float32(rhs_nonzero)
+  lhs_mask, rhs_nonzero = onp.float32(lhs_mask), np.float32(rhs_nonzero)
   out = onp.array(lax.conv_general_dilated(lhs_mask, rhs_nonzero, **params))
   full_out = onp.array(lax.conv_general_dilated(
     onp.ones_like(lhs_mask), rhs_nonzero, **params))
