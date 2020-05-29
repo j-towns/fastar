@@ -346,8 +346,9 @@ def _filter_nonzero(arr):
 
 def _conv_general_dilated_outmask(lhs_mask, rhs_nonzero, **params):
   # Note: we assume that rhs_mask doesn't change
-  lhs_unknown, rhs_nonzero = onp.float32(~lhs_mask), onp.float32(rhs_nonzero)
-  out_unknown = lax.conv_general_dilated(lhs_unknown, rhs_nonzero, **params)
+  lhs_unknown, rhs_nonzero = onp.float32(~lhs_mask), np.float32(rhs_nonzero)
+  out_unknown = onp.asarray(
+      lax.conv_general_dilated(lhs_unknown, rhs_nonzero, **params))
   return out_unknown == 0
 
 
