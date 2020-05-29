@@ -49,7 +49,7 @@ def _update_slice(arr, slc, new):
     stops. append(dim_sz if s.stop  is None else s.stop )
     assert s.step is None or s.step == 1
   assert new.shape == tuple(onp.subtract(stops, starts))
-  return lax.dynamic_update_slice(arr, new, np.array(starts))
+  return lax.dynamic_update_slice(arr, new, starts)
 
 # n-ary elementwise operators with broadcasting
 @curry
@@ -345,11 +345,10 @@ def _filter_nonzero(arr):
 
 def _conv_general_dilated_outmask(lhs_mask, rhs_nonzero, **params):
   # Note: we assume that rhs_mask doesn't change
-  lhs_mask, rhs_nonzero = onp.float32(lhs_mask), np.float32(rhs_nonzero)
-  out = onp.array(lax.conv_general_dilated(lhs_mask, rhs_nonzero, **params))
-  full_out = onp.array(lax.conv_general_dilated(
-    onp.ones_like(lhs_mask), rhs_nonzero, **params))
-  return out == full_out
+  lhs_unknown, rhs_nonzero = onp.float32(~lhs_mask), np.float32(rhs_nonzero)
+  out_unknown = onp.array(
+      lax.conv_general_dilated(lhs_unknown, rhs_nonzero, **params))
+  return out_unknown == 0
 
 
 def _conv_general_dilated_update_slice_op(
