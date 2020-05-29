@@ -1,8 +1,10 @@
 from functools import reduce
+from functools import partial
 from operator import and_
 from warnings import warn
 
 from jax import lax
+from jax import lax_reference
 from jax.util import safe_map, safe_zip
 import jax.numpy as np
 from jax.scipy import special
@@ -134,28 +136,27 @@ for op in _naryops:
 
 
 # Cheap ops, these are assumed to require little or no computation
-@curry
-def _cheap_op_update(op, old_out, *args, **params):
+def _cheap_op_update(op, np_op, old_out, *args, **params):
   args, args_mask = zip(*args)
   # TODO: use onp equivalents to process the masks
   return Parray((op.bind(*args, **params),
-                 onp.bool_(op.bind(*args_mask, **params))))
-
+                 np_op(*args_mask, **params)))
 
 _cheap_ops = [
-  lax.broadcast_p,
-  lax.broadcast_in_dim_p,
-  lax.concatenate_p,
-  lax.convert_element_type_p,
-  lax.reshape_p,
-  lax.rev_p,
-  lax.slice_p,
-  lax.tie_in_p,
-  lax.transpose_p,
+  (lax.broadcast_p, lax_reference.broadcast),
+  (lax.broadcast_in_dim_p, lax_reference.broadcast_in_dim),
+  (lax.concatenate_p, lambda *xs, dimension: onp.concatenate(xs, dimension)),
+  (lax.convert_element_type_p, lambda x, **_: x),
+  (lax.reshape_p, lax_reference.reshape),
+  (lax.rev_p, lax_reference.rev),
+  (lax.slice_p, lax_reference.slice),
+  (lax.tie_in_p, lambda x_mask, y_mask: y_mask),
+  (lax.transpose_p, lambda x, permutation: onp.transpose(x, permutation)),
+  (lax.squeeze_p, lambda x, dimensions: onp.squeeze(x, dimensions)),
 ]
 
-for op in _cheap_ops:
-  update_rules[op] = _cheap_op_update(op)
+for op, np_op in _cheap_ops:
+  update_rules[op] = partial(_cheap_op_update, op, np_op)
 
 
 def _gather_update(
@@ -345,9 +346,8 @@ def _filter_nonzero(arr):
 
 def _conv_general_dilated_outmask(lhs_mask, rhs_nonzero, **params):
   # Note: we assume that rhs_mask doesn't change
-  lhs_unknown, rhs_nonzero = onp.float32(~lhs_mask), np.float32(rhs_nonzero)
-  out_unknown = onp.array(
-      lax.conv_general_dilated(lhs_unknown, rhs_nonzero, **params))
+  lhs_unknown, rhs_nonzero = onp.float32(~lhs_mask), onp.float32(rhs_nonzero)
+  out_unknown = lax.conv_general_dilated(lhs_unknown, rhs_nonzero, **params)
   return out_unknown == 0
 
 
