@@ -1,2 +1,2 @@
-from fastar.core import accelerate, Parray, parray
+from fastar.core import partial_eval, Parray, parray
 import fastar.update_rules

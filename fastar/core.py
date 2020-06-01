@@ -219,7 +219,13 @@ class Parray(tuple):
   zeros so that np.all(~known & arr == 0).
   """
   # TODO(j-towns): do we need to require uncomputed values to be zero?
-  pass
+  def __repr__(self):
+    arr, mask = self
+    nan_unknowns = np.where(mask, arr, onp.nan)
+    with onp.printoptions(nanstr='- '):
+      r = repr(nan_unknowns)
+    return 'Parray<{}>'.format(r)
+
 def _flatten_parray(parray):
   arr, known = parray
   return [arr], Hashable(known)
@@ -261,8 +267,8 @@ def _update_env(fun, args, env):
   return tree_unflatten(out_tree, ans), env
 
 ## High level API
-def accelerate(fun):
-  """Accelerate the execution of `fun` when `fun` is called many times.
+def partial_eval(fun):
+  """Returns a pair init_fun, update_fun, for progressive evaluation of fun.
 
   The input function is assumed to be part of a loop where intermediate values
   are progressively evaluated, for example an autoregressive sampling loop. The
@@ -288,7 +294,7 @@ def accelerate(fun):
   a pytree containing Parray(arr, mask) pairs.
 
   Args:
-    fun: Function to be accelerated.
+    fun: Function to be partially evaluated.
 
   Returns:
     A pair (init, update), both functions, init taking in *args which are the
