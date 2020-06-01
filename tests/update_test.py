@@ -111,6 +111,9 @@ def test_reshape():
   check(lambda x: lax.reshape(x, new_sizes=(3, 2), dimensions=(1, 0, 2)),
         randn((1, 2, 3)))
 
+def test_squeeze():
+  check(lambda x: lax.squeeze(x, dimensions=(0,)), randn((1, 2, 3)))
+
 def test_concatenate_2():
   check(lambda x, y: lax.concatenate((x, y), dimension=2),
         randn((1, 2, 1)), randn((1, 2, 3)))
