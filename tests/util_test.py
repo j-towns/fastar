@@ -42,6 +42,7 @@ def test_submerge_consts():
                                  let c = pow a [2. 3.]
                                  in (c,) }
                     device=None
+                    donated_invars=(False, False)
                     name=f ] c
       f = mul d [1. 3.]
   in (f,) }"""
@@ -69,6 +70,7 @@ def test_submerge_consts_with_folding():
                                      f = add 2.0 e
                                  in (f,) }
                     device=None
+                    donated_invars=(False, False, False)
                     name=f ] c
       g = mul e [1. 3.]
   in (g,) }"""
