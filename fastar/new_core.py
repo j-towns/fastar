@@ -11,25 +11,29 @@ import numpy as np
 map = safe_map
 zip = safe_zip
 
+UNKNOWN = 0
+REQUESTED = -1
+KNOWN = 1
+
 def box_to_slice(box):
-  return tuple(slice(start, start + size) for start, size in box)
+  return tuple(slice(start, start + size) for start, size in zip(*box))
 
 backward_rules = {}
 update_rules = {}
 
 class LazyArray(object):
-  __slots__ = ['env', 'cache', 'known', 'primitive', 'invars', 'params',
-               'invals']
+  __slots__ = ['cache', 'state', 'eqn', 'var_idx']
 
-  def __init__(self, aval, primitive, env, invars, params):
-    assert not primitive.multiple_results, "Not implemented"
-    self.cache = jnp.zeros(aval.shape, aval.dtype)
-    self.known = np.zeros(aval.shape, int)
-    self.primitive = primitive
-    self.env = env
-    self.invars = invars
-    self.params = params
-    self.invals = None
+  def __init__(self, var):
+    self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
+    self.state = np.zeros(var.aval.shape, int)
+    self.eqn = None
+    self.var_idx = None
+
+  def set_eqn(self, eqn):
+    assert self.eqn is None and self.var_idx is None
+    self.eqn = eqn
+    self.var_idx = eqn.outvars.index(self)
 
   @property
   def shape(self):
@@ -44,23 +48,33 @@ class LazyArray(object):
     return self.cache.ndim
 
   def getbox(self, box):
-    if self.invals is None:
-      self.invals = [read(self.env, var) for var in self.invars]
-    invals = self.invals
+    assert np.shape(box) == (2, self.ndim)
+    invals, outvals, primitive, params = self.eqn
     in_avals = map(get_aval, invals)
-    assert np.shape(box) == (self.ndim, 2)
-    # First summon everything we need in order to compute `box`
-    for u_box in dynamic_box_finder(self.known, box):
-      self.known[box_to_slice(u_box)] = -1
-      inboxes = backward_rules[self.primitive](u_box, *in_avals, **self.params)
+    state = self.state[box_to_slice(box)]
+    to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
+    # First request everything we need in order to compute `box`
+    for u_box in box_finder(state, UNKNOWN):
+      state[box_to_slice(u_box)] = REQUESTED
+      if primitive.multiple_results:
+        # TODO: pass var_idx to the backward rule
+        raise NotImplementedError
+      else:
+        inboxes = backward_rules[primitive](
+            to_global_coords(u_box), *in_avals, **params)
       for val, inbox in zip(invals, inboxes):
         if isinstance(val, LazyArray):
           val.getbox(inbox)
     # Then compute any remaining unknowns in `box`
-    for u_box in box_finder(self.known, box):
-      self.cache = update_rules[self.primitive](
-          self.cache, u_box, *invals, **self.params)
-      self.known[box_to_slice(u_box)] = 1
+    for u_box in box_finder(state, REQUESTED):
+      if primitive.multiple_results:
+        # TODO: pass var_idx to the update rule
+        raise NotImplementedError
+        pass
+      else:
+        self.cache = update_rules[primitive](
+            self.cache, to_global_coords(u_box), *invals, **params)
+      state[box_to_slice(u_box)] = KNOWN
     return self.cache[box_to_slice(box)]  # TODO: replace with lax.slice
 
 def get_aval(x):
@@ -82,13 +96,13 @@ def tie_the_knot(typed_jaxpr):
   return jc.TypedJaxpr(new_jaxpr, typed_jaxpr.literals, [],
                        typed_jaxpr.out_avals)
 
-def read(env, v):
-  if type(v) is jc.Literal:
-    return v.val
-  else:
-    return env[v]
-
 def lazy_eval_jaxpr(jaxpr, consts, *args):
+  def read(v):
+    if type(v) is jc.Literal:
+      return v.val
+    else:
+      return env[v]
+
   def write(v, val):
     env[v] = val
 
@@ -98,16 +112,19 @@ def lazy_eval_jaxpr(jaxpr, consts, *args):
   map(write, jaxpr.invars, args)
   for eqn in jaxpr.eqns:
     call_jaxpr, params = jc.extract_call_jaxpr(eqn.primitive, eqn.params)
-    if call_jaxpr or eqn.primitive.multiple_results:
+    if call_jaxpr:
       raise NotImplementedError
-    else:
-      outvar = eqn.outvars[0]
-      write(outvar, LazyArray(outvar.aval, eqn.primitive, env, eqn.invars,
-                              eqn.params))
-  return map(partial(read, env), jaxpr.outvars)
+    map(write, eqn.outvars, map(LazyArray, eqn.outvars))
+  for eqn in jaxpr.eqns:
+    invals = map(read, eqn.invars)
+    outvals = map(read, eqn.outvars)
+    new_eqn = jc.JaxprEqn(invals, outvals, eqn.primitive, eqn.params)
+    map(lambda arr: arr.set_eqn(new_eqn), outvals)
+  return map(read, jaxpr.outvars)
 
 def naryop_backward_rule(outbox, *in_avals, **params):
-  return [[(0, 1) if s == 1 else b for s, b in zip(aval.shape, outbox)]
+  return [zip(*((0, 1) if s == 1 else b
+                for s, b in zip(aval.shape, zip(*outbox))))
           if aval.shape else [] for aval in in_avals]
 
 def naryop_update_rule(op, cache, outbox, *invals, **params):
@@ -128,39 +145,18 @@ def test_boxes(starts, sizes, dim):
                 for d, (start, size) in enumerate(zip(starts, sizes)))
     i = i + 1
 
-def dynamic_box_finder(known, box):
-  known = known[box_to_slice(box)]
+def box_finder(known, value):
   it = np.nditer(known, flags=['multi_index'])
   for k in it:
-    if k == 0:
+    if k == value:
       starts = it.multi_index
       sizes = known.ndim * [1]
       for d in range(known.ndim):
         box_iter = test_boxes(starts, sizes, d)
         while (starts[d] + sizes[d] < known.shape[d] and
-               np.all(known[next(box_iter)] == 0)):
+               np.all(known[next(box_iter)] == value)):
           sizes[d] = sizes[d] + 1
-      starts = np.add(starts, np.transpose(box)[0])
-      yield zip(starts, sizes)
-
-def box_finder(known, box):
-  known = known[box_to_slice(box)] == -1  # Make a copy
-  it = np.nditer(known, flags=['multi_index'])
-  boxes = []
-  for k in it:
-    if k == True:
-      starts = it.multi_index
-      sizes = known.ndim * [1]
-      for d in range(known.ndim):
-        box_iter = test_boxes(starts, sizes, d)
-        while (starts[d] + sizes[d] < known.shape[d] and
-               np.all(known[next(box_iter)])):
-          sizes[d] = sizes[d] + 1
-      known[box_to_slice(zip(starts, sizes))] = False
-      starts = np.add(starts, np.transpose(box)[0])
-      boxes.append(zip(starts, sizes))
-  return boxes
-
+      yield starts, sizes
 
 if __name__ == "__main__":
   from jax import make_jaxpr
