@@ -22,11 +22,12 @@ backward_rules = {}
 update_rules = {}
 
 class LazyArray(object):
-  __slots__ = ['cache', 'state', 'eqn', 'var_idx']
+  __slots__ = ['cache', 'state', 'eqn', 'var_idx', 'child_counts']
 
   def __init__(self, var):
     self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
     self.state = np.zeros(var.aval.shape, int)
+    self.child_counts = np.zeros(var.aval.shape, int)
     self.eqn = None
     self.var_idx = None
 
@@ -47,39 +48,70 @@ class LazyArray(object):
   def ndim(self):
     return self.cache.ndim
 
-  def getbox(self, box):
-    assert np.shape(box) == (2, self.ndim)
+  @property
+  def _aval(self):
+    return self.cache.aval
+
+  def _compute_ancestral_child_counts(self, box):
     invals, outvals, primitive, params = self.eqn
     in_avals = map(get_aval, invals)
-    state = self.state[box_to_slice(box)]
+    local_state = self.state[box_to_slice(box)] if self.shape else self.state
     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
-    # First request everything we need in order to compute `box`
-    for u_box in box_finder(state, UNKNOWN):
-      state[box_to_slice(u_box)] = REQUESTED
+    for u_box in box_finder(local_state, UNKNOWN):
+      local_state[box_to_slice(u_box)] = REQUESTED
       if primitive.multiple_results:
         # TODO: pass var_idx to the backward rule
         raise NotImplementedError
       else:
-        inboxes = backward_rules[primitive](
+        inboxes, counts = backward_rules[primitive](
             to_global_coords(u_box), *in_avals, **params)
-      for val, inbox in zip(invals, inboxes):
-        if isinstance(val, LazyArray):
-          val.getbox(inbox)
-    # Then compute any remaining unknowns in `box`
-    for u_box in box_finder(state, REQUESTED):
+        for ival, ibox, count in zip(invals, inboxes, counts):
+          if isinstance(ival, LazyArray):
+            ival.child_counts[box_to_slice(ibox)] += count
+            ival._compute_ancestral_child_counts(ibox)
+
+  def _toposort(self, box):
+    self._compute_ancestral_child_counts(box)
+    to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
+    sorted_boxes = []
+    local_child_counts = (self.child_counts[box_to_slice(box)] if self.shape
+                          else self.child_counts)
+    childless_boxes = [(self, to_global_coords(b)) for b in
+                       static_box_finder(local_child_counts, 0)]
+    while childless_boxes:
+      arr, box = childless_boxes.pop()
+      sorted_boxes.append((arr, box))
+      invals, _, primitive, params = arr.eqn
+      in_avals = map(get_aval, invals)
+      inboxes, counts = backward_rules[primitive](box, *in_avals, **params)
+      for ival, ibox, count in zip(invals, inboxes, counts):
+        if isinstance(ival, LazyArray):
+          to_iglobal_coords = lambda b: (np.add(ibox[0], b[0]), b[1])
+          ichild_counts = (ival.child_counts[box_to_slice(ibox)] if ival.shape
+                           else ival.child_counts)
+          ichild_counts -= count
+          childless_boxes.extend(
+              [(ival, to_iglobal_coords(b))
+               for b in static_box_finder(ichild_counts[box_to_slice(ibox)], 0)])
+    return sorted_boxes[::-1]
+
+  def getbox(self, box):
+    assert np.shape(box) == (2, self.ndim)
+    for arr, u_box in self._toposort(box):
+      invals, outvals, primitive, params = arr.eqn
       if primitive.multiple_results:
-        # TODO: pass var_idx to the update rule
         raise NotImplementedError
-        pass
       else:
-        self.cache = update_rules[primitive](
-            self.cache, to_global_coords(u_box), *invals, **params)
-      state[box_to_slice(u_box)] = KNOWN
-    return self.cache[box_to_slice(box)]  # TODO: replace with lax.slice
+        invals = [val.cache if isinstance(val, LazyArray) else val
+                  for val in invals]
+        arr.cache = update_rules[primitive](
+            arr.cache, u_box, *invals, **params)
+        arr.state[box_to_slice(u_box)] = KNOWN
+    return self.cache[box_to_slice(box)]
 
 def get_aval(x):
   if isinstance(x, LazyArray):
-    return x.aval
+    return x._aval
   else:
     return jc.get_aval(x)
 
@@ -123,16 +155,23 @@ def lazy_eval_jaxpr(jaxpr, consts, *args):
   return map(read, jaxpr.outvars)
 
 def naryop_backward_rule(outbox, *in_avals, **params):
-  return [zip(*((0, 1) if s == 1 else b
-                for s, b in zip(aval.shape, zip(*outbox))))
-          if aval.shape else [] for aval in in_avals]
+  out_starts, out_shape = outbox
+  in_starts = [
+      [0 if s == 1 else o_start for s, o_start in zip(aval.shape, out_starts)]
+      if aval.shape else [] for aval in in_avals]
+  in_shapes = [
+      [1 if s == 1 else o_dim for s, o_dim in zip(aval.shape, out_shape)]
+      if aval.shape else [] for aval in in_avals]
+  in_counts = [
+      np.prod([o_dim if s == 1 else 1
+               for s, o_dim in zip(aval.shape, out_shape)])
+      if aval.shape else np.prod(out_shape) for aval in in_avals]
+  return zip(in_starts, in_shapes), in_counts
 
 def naryop_update_rule(op, cache, outbox, *invals, **params):
-  inboxes = naryop_backward_rule(outbox, *map(get_aval, invals))
-  invals = [val.getbox(box) if isinstance(val, LazyArray)
-            else val[box_to_slice(box)] for val, box in zip(invals, inboxes)]
-  out = op.bind(*invals, **params)
-  return index_update(cache, box_to_slice(outbox), out)
+  inboxes, _ = naryop_backward_rule(outbox, *map(get_aval, invals))
+  invals = [val[box_to_slice(box)] for val, box in zip(invals, inboxes)]
+  return lax.dynamic_update_slice(cache, op.bind(*invals, **params), outbox[0])
 
 backward_rules[lax.add_p] = naryop_backward_rule
 update_rules[lax.add_p] = partial(naryop_update_rule, lax.add_p)
@@ -158,12 +197,21 @@ def box_finder(known, value):
           sizes[d] = sizes[d] + 1
       yield starts, sizes
 
+def static_box_finder(known, value):
+  tmp = known == value
+  ret = []
+  for box in box_finder(tmp, 1):
+    ret.append(box)
+    tmp[box_to_slice(box)] = 0
+  return list(ret)
+
 if __name__ == "__main__":
   from jax import make_jaxpr
 
   x = jnp.array([1, 2, 3])
-  y = jnp.array([4, 5, 6])
+  y = jnp.array([4])
+  z = jnp.array([5])
 
-  jaxpr = make_jaxpr(lambda x, y: lax.add(x, y))(x, y)
+  jaxpr = make_jaxpr(lambda x, y, z: lax.add(x, lax.add(y, z)))(x, y, z)
 
-  out, = lazy_eval_jaxpr(jaxpr.jaxpr, [], x, y)
+  out, = lazy_eval_jaxpr(jaxpr.jaxpr, [], x, y, z)
