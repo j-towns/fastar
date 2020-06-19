@@ -66,8 +66,9 @@ class LazyArray(object):
         inboxes, counts = backward_rules[primitive](
             to_global_coords(u_box), *in_avals, **params)
         for ival, ibox, count in zip(invals, inboxes, counts):
-          if isinstance(ival, LazyArray):
-            ival.child_counts[box_to_slice(ibox)] += count
+          if isinstance(ival, LazyArray) and ibox is not None:
+            ival.child_counts[box_to_slice(ibox)] += (
+                count * (ival.state[box_to_slice(ibox)] != KNOWN))
             ival._compute_ancestral_child_counts(ibox)
 
   def _toposort(self, box):
@@ -76,8 +77,10 @@ class LazyArray(object):
     sorted_boxes = []
     local_child_counts = (self.child_counts[box_to_slice(box)] if self.shape
                           else self.child_counts)
-    childless_boxes = [(self, to_global_coords(b)) for b in
-                       static_box_finder(local_child_counts, 0)]
+    childless_boxes = [
+        (self, to_global_coords(b)) for b in static_box_finder(
+            (local_child_counts == 0)
+            & (self.state[box_to_slice(box)] != KNOWN), 1)]
     while childless_boxes:
       arr, box = childless_boxes.pop()
       sorted_boxes.append((arr, box))
@@ -85,27 +88,27 @@ class LazyArray(object):
       in_avals = map(get_aval, invals)
       inboxes, counts = backward_rules[primitive](box, *in_avals, **params)
       for ival, ibox, count in zip(invals, inboxes, counts):
-        if isinstance(ival, LazyArray):
+        if isinstance(ival, LazyArray) and ibox is not None:
           to_iglobal_coords = lambda b: (np.add(ibox[0], b[0]), b[1])
           ichild_counts = (ival.child_counts[box_to_slice(ibox)] if ival.shape
                            else ival.child_counts)
-          ichild_counts -= count
+          ichild_counts -= (count * (ival.state[box_to_slice(ibox)] != KNOWN))
           childless_boxes.extend(
               [(ival, to_iglobal_coords(b))
-               for b in static_box_finder(ichild_counts[box_to_slice(ibox)], 0)])
+               for b in static_box_finder(
+                   (ichild_counts == 0) &
+                   (ival.state[box_to_slice(ibox)] != KNOWN), 1)])
     return sorted_boxes[::-1]
 
   def getbox(self, box):
     assert np.shape(box) == (2, self.ndim)
     for arr, u_box in self._toposort(box):
-      invals, outvals, primitive, params = arr.eqn
+      invals, _, primitive, params = arr.eqn
       if primitive.multiple_results:
         raise NotImplementedError
       else:
-        invals = [val.cache if isinstance(val, LazyArray) else val
-                  for val in invals]
-        arr.cache = update_rules[primitive](
-            arr.cache, u_box, *invals, **params)
+        invals = [v.cache if isinstance(v, LazyArray) else v for v in invals]
+        arr.cache = update_rules[primitive](arr.cache, u_box, *invals, **params)
         arr.state[box_to_slice(u_box)] = KNOWN
     return self.cache[box_to_slice(box)]
 
@@ -120,7 +123,7 @@ def tie_the_knot(typed_jaxpr):
   assert all(i == o for i, o in zip(in_avals, out_avals))
   in2out = dict(zip(jaxpr.invars, jaxpr.outvars))
   def replace(eqn):
-    invars = [in_to_out[i] if (isinstance(i, jc.Var) and i in in_to_out) else i
+    invars = [in2out[i] if (isinstance(i, jc.Var) and i in in2out) else i
               for i in eqn.invars]
     return jc.JaxprEqn(invars, eqn.outvars, eqn.primitive, eqn.params)
   eqns = [replace(eqn) for eqn in jaxpr.eqns]
@@ -176,6 +179,60 @@ def naryop_update_rule(op, cache, outbox, *invals, **params):
 backward_rules[lax.add_p] = naryop_backward_rule
 update_rules[lax.add_p] = partial(naryop_update_rule, lax.add_p)
 
+def concatenate_backward_rule(outbox, *in_avals, **params):
+  dim = params['dimension']
+  outstart, outshape = map(list, outbox)
+  dimstart, dimshape  = outstart[dim], outshape[dim]
+  position = 0
+  inboxes = []
+  incounts = []
+  for a in in_avals:
+    if dimstart < position + a.shape[dim] and position < dimstart + dimshape:
+      instart = (outstart[:dim]
+                 + [max(0, dimstart - position)] + outstart[dim + 1:])
+      inshape = (outshape[:dim]
+                 + [min(a.shape[dim] - dimstart + position,
+                        dimstart + dimshape - position)]
+                 + outshape[dim + 1:])
+      inboxes.append((instart, inshape))
+      incounts.append(np.ones(inshape, int))
+    else:
+      inboxes.append(None)
+      incounts.append(None)
+    position = position + a.shape[dim]
+  return inboxes, incounts
+
+def concatenate_update_rule(cache, outbox, *invals, **params):
+  dim = params['dimension']
+  inboxes, _ = concatenate_backward_rule(outbox, *invals, **params)
+  invals = [val[box_to_slice(box)] for val, box in zip(invals, inboxes)
+            if box is not None]
+  out_start, _ = outbox
+  return lax.dynamic_update_slice(
+      cache, lax.concatenate(invals, dim), out_start)
+
+backward_rules[lax.concatenate_p] = concatenate_backward_rule
+update_rules[lax.concatenate_p] = concatenate_update_rule
+
+def slice_backward_rule(outbox, operand, start_indices, limit_indices, strides):
+  if strides is not None:
+    raise NotImplementedError
+  out_start, out_shape = outbox
+  in_start = np.add(out_start, start_indices)
+  return [(in_start, out_shape)], [np.ones(out_shape, int)]
+
+def slice_update_rule(cache, outbox, operand, start_indices, limit_indices,
+                      strides):
+  if strides is not None:
+    raise NotImplementedError
+  out_start, out_shape = outbox
+  in_start = np.add(out_start, start_indices)
+  return lax.dynamic_update_slice(
+      cache, lax.dynamic_slice(operand, in_start, out_shape), out_start)
+
+backward_rules[lax.slice_p] = slice_backward_rule
+update_rules[lax.slice_p] = slice_update_rule
+
 def test_boxes(starts, sizes, dim):
   assert sizes[dim] == 1
   i = 1
@@ -212,6 +269,7 @@ if __name__ == "__main__":
   y = jnp.array([4])
   z = jnp.array([5])
 
-  jaxpr = make_jaxpr(lambda x, y, z: lax.add(x, lax.add(y, z)))(x, y, z)
+  jaxpr = tie_the_knot(make_jaxpr(
+      lambda x: lax.concatenate([z, lax.slice(x, [0], [2])], 0))(x))
 
-  out, = lazy_eval_jaxpr(jaxpr.jaxpr, [], x, y, z)
+  out, = lazy_eval_jaxpr(jaxpr.jaxpr, jaxpr.literals)
