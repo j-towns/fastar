@@ -6,7 +6,11 @@ indices of a slice in each dimension of `a` and the sizes are the sizes of the
 slice in each dimension.
 """
 import numpy as np
+from jax.util import safe_map, safe_zip
 
+
+map = safe_map
+zip = safe_zip
 
 def box_to_slice(box):
   return tuple(slice(start, start + size) for start, size in zip(*box))
