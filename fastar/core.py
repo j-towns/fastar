@@ -1,319 +1,304 @@
-from contextlib import contextmanager
-from functools import reduce
-from operator import and_
-
-import numpy as onp
-
+import jax.numpy as jnp
 import jax.core as jc
-from jax import abstract_arrays
-from jax.abstract_arrays import ShapedArray
-from jax import dtypes
-import jax.interpreters.partial_eval as pe
-import jax.lax as lax
-import jax.linear_util as lu
-import jax.scipy.special as special
-import numpy as onp
-from jax import numpy as np, jit as jit_
-from jax.ad_util import zeros_like_aval
-from .util import (true_mask, false_mask, mask_all, Hashable, mask_to_slices,
-                   submerge_consts, _DontWrap, fastar_tree_flatten)
-from jax.interpreters import xla
+from jax.interpreters import partial_eval as pe
+from jax.util import safe_map, safe_zip, partial
+from jax import make_jaxpr
+from jax import lax
 from jax.ops import index_update
-from jax.tree_util import (
-  tree_flatten, tree_unflatten, tree_map, register_pytree_node, Partial)
-from jax.api_util import flatten_fun_nokwargs
-from jax.util import curry, safe_zip, safe_map
-from jax.util import partial, unzip2, cache
+import numpy as np
+
 
 map = safe_map
 zip = safe_zip
 
+UNKNOWN = 0
+REQUESTED = -1
+KNOWN = 1
 
-def _get_aval(x):
-  return abstract_arrays.raise_to_shaped(jc.get_aval(x))
+def box_to_slice(box):
+  return tuple(slice(start, start + size) for start, size in zip(*box))
 
-
-## Core
-init_rules = {}
-
-
-def _init_ans(prim, *args, **params):
-  if prim in init_rules:
-    return init_rules[prim](*args, **params)
-  else:
-    args = [_get_aval(arg) for arg, _ in args]
-    abstract_out = prim.abstract_eval(*args, **params)
-    if prim.multiple_results:
-      return [parray(zeros_like_aval(o), false_mask(o))
-              for o in abstract_out]
+def slice_to_box(shape, sl):
+  if not isinstance(sl, tuple):
+    sl = (sl,) + (len(shape) - 1) * (slice(None),)
+  starts, dims = [], []
+  int_dims = []
+  for i, (arr_dim, s) in enumerate(zip(shape, sl)):
+    if not isinstance(s, slice):
+      start, stop, step = s, s + 1, None
+      int_dims.append(i)
     else:
-      return parray(zeros_like_aval(abstract_out),
-                    false_mask(abstract_out))
+      start, stop, step = s.start, s.stop, s.step
+    if step is not None:
+      raise ValueError("Slicing a LazyArray with step != 1 is not supported.")
+    start = 0 if start is None else start
+    if start < 0 or start > arr_dim:
+      raise ValueError("Start of slice is outside of array.")
+    stop = arr_dim if stop is None else stop
+    if stop < 0 or stop > arr_dim:
+      raise ValueError("Stop of slice is outside of array.")
+    starts.append(start)
+    dims.append(stop - start)
+  return (starts, dims), set(int_dims)
 
-
+backward_rules = {}
 update_rules = {}
 
+class LazyArray(object):
+  __slots__ = ['cache', 'state', 'eqn', 'var_idx', 'child_counts']
 
-def _get_update(p):
-  try:
-    return update_rules[p]
-  except KeyError:
-    raise NotImplementedError(
-      "Fastar update rule for '{}' not implemented".format(p))
+  def __init__(self, var):
+    self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
+    self.state = np.zeros(var.aval.shape, int)
+    self.child_counts = np.zeros(var.aval.shape, int)
+    self.eqn = None
+    self.var_idx = None
 
+  def set_eqn(self, eqn):
+    assert self.eqn is None and self.var_idx is None
+    self.eqn = eqn
+    self.var_idx = eqn.outvars.index(self)
 
-# Populate the cache
-def _firstpass(jaxpr, consts, args):
+  @property
+  def shape(self):
+    return self.cache.shape
+
+  @property
+  def dtype(self):
+    return self.cache.dtype
+
+  @property
+  def ndim(self):
+    return self.cache.ndim
+
+  @property
+  def _aval(self):
+    return self.cache.aval
+
+  def _compute_ancestral_child_counts(self, box):
+    invals, outvals, primitive, params = self.eqn
+    in_avals = map(get_aval, invals)
+    local_state = self.state[box_to_slice(box)] if self.shape else self.state
+    to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
+    for u_box in box_finder(local_state, UNKNOWN):
+      local_state[box_to_slice(u_box)] = REQUESTED
+      if primitive.multiple_results:
+        # TODO: pass var_idx to the backward rule
+        raise NotImplementedError
+      else:
+        inboxes, counts = backward_rules[primitive](
+            to_global_coords(u_box), *in_avals, **params)
+        for ival, ibox, count in zip(invals, inboxes, counts):
+          if isinstance(ival, LazyArray) and ibox is not None:
+            ival.child_counts[box_to_slice(ibox)] += (
+                count * (ival.state[box_to_slice(ibox)] != KNOWN))
+            ival._compute_ancestral_child_counts(ibox)
+
+  def _toposort(self, box):
+    self._compute_ancestral_child_counts(box)
+    to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
+    sorted_boxes = []
+    local_child_counts = (self.child_counts[box_to_slice(box)] if self.shape
+                          else self.child_counts)
+    childless_boxes = [
+        (self, to_global_coords(b)) for b in static_box_finder(
+            (local_child_counts == 0)
+            & (self.state[box_to_slice(box)] != KNOWN), 1)]
+    while childless_boxes:
+      arr, box = childless_boxes.pop()
+      sorted_boxes.append((arr, box))
+      invals, _, primitive, params = arr.eqn
+      in_avals = map(get_aval, invals)
+      inboxes, counts = backward_rules[primitive](box, *in_avals, **params)
+      for ival, ibox, count in zip(invals, inboxes, counts):
+        if isinstance(ival, LazyArray) and ibox is not None:
+          to_iglobal_coords = lambda b: (np.add(ibox[0], b[0]), b[1])
+          ichild_counts = (ival.child_counts[box_to_slice(ibox)] if ival.shape
+                           else ival.child_counts)
+          ichild_counts -= (count * (ival.state[box_to_slice(ibox)] != KNOWN))
+          childless_boxes.extend(
+              [(ival, to_iglobal_coords(b))
+               for b in static_box_finder(
+                   (ichild_counts == 0) &
+                   (ival.state[box_to_slice(ibox)] != KNOWN), 1)])
+    return sorted_boxes[::-1]
+
+  def getbox(self, box):
+    assert np.shape(box) == (2, self.ndim)
+    for arr, u_box in self._toposort(box):
+      invals, _, primitive, params = arr.eqn
+      if primitive.multiple_results:
+        raise NotImplementedError
+      else:
+        invals = [v.cache if isinstance(v, LazyArray) else v for v in invals]
+        arr.cache = update_rules[primitive](arr.cache, u_box, *invals, **params)
+        arr.state[box_to_slice(u_box)] = KNOWN
+    return self.cache[box_to_slice(box)]
+
+  def __getitem__(self, idx):
+    box, int_dims = slice_to_box(self.shape, idx)
+    return self.getbox(box)[tuple(0 if i in int_dims else slice(None)
+                                  for i in range(self.ndim))]
+
+def get_aval(x):
+  if isinstance(x, LazyArray):
+    return x._aval
+  else:
+    return jc.get_aval(x)
+
+def tie_the_knot(typed_jaxpr):
+  jaxpr, _, in_avals, out_avals = typed_jaxpr
+  assert all(i == o for i, o in zip(in_avals, out_avals))
+  in2out = dict(zip(jaxpr.invars, jaxpr.outvars))
+  def replace(eqn):
+    invars = [in2out[i] if (isinstance(i, jc.Var) and i in in2out) else i
+              for i in eqn.invars]
+    return jc.JaxprEqn(invars, eqn.outvars, eqn.primitive, eqn.params)
+  eqns = [replace(eqn) for eqn in jaxpr.eqns]
+  new_jaxpr = jc.Jaxpr(jaxpr.constvars, [], jaxpr.outvars, eqns)
+  return jc.TypedJaxpr(new_jaxpr, typed_jaxpr.literals, [],
+                       typed_jaxpr.out_avals)
+
+def lazy_eval_jaxpr(jaxpr, consts, *args):
   def read(v):
-    if isinstance(v, jc.Literal):
-      return parray(v.val, true_mask(v.val))
+    if type(v) is jc.Literal:
+      return v.val
     else:
-      val = env[repr(v)]
-      assert isinstance(val, Parray)
-      return val
+      return env[v]
 
   def write(v, val):
-    assert isinstance(val, Parray)
-    env[repr(v)] = val
+    env[v] = val
 
-  def delete(v):
-    del env[repr(v)]
-
-  def write_subenv(vs, env):
-    subenvs[repr(vs)] = env
-
-  # Mapping from repr(var) to var's value. We use repr(var) because it is
-  # hashable, and we need env to be a valid pytree.
   env = {}
-  subenvs = {}
-
-  write(jc.unitvar, parray(jc.unit, true_mask(jc.unit)))
+  write(jc.unitvar, jc.unit)
   map(write, jaxpr.constvars, consts)
   map(write, jaxpr.invars, args)
   for eqn in jaxpr.eqns:
-    in_vals = map(read, eqn.invars)
     call_jaxpr, params = jc.extract_call_jaxpr(eqn.primitive, eqn.params)
     if call_jaxpr:
-      ans, subenv = _init_ans(eqn.primitive, params, call_jaxpr, in_vals)
-      ans, subenv = _get_update(eqn.primitive)(
-        params, call_jaxpr, in_vals, subenv)
-
-      write_subenv(tuple(eqn.outvars), subenv)
-    else:
-      ans = _init_ans(eqn.primitive, *in_vals, **eqn.params)
-      ans = _get_update(eqn.primitive)(ans, *in_vals, **eqn.params)
-    if eqn.primitive.multiple_results:
-      map(write, eqn.outvars, ans)
-    else:
-      write(eqn.outvars[0], ans)
-  map(delete, jaxpr.constvars)
-  map(delete, jaxpr.invars)
-  delete(jc.unitvar)
-  return map(read, jaxpr.outvars), (env, subenvs)
-
-@lu.transformation_with_aux
-def _inited_fun(jaxpr, in_treedef, *args):
-  args = tree_unflatten(in_treedef, args)
-  out = yield (jaxpr, [], args), {}
-  yield tree_flatten(out)
-
-def _call_init_rule(primitive, params, jaxpr, in_vals):
-  args, in_treedef = tree_flatten(in_vals)
-  fun = lu.wrap_init(_firstpass)
-  fun, out_treedef = _inited_fun(fun, jaxpr, in_treedef)
-  out = primitive.bind(fun, *args, **params)
-  return tree_unflatten(out_treedef(), out)
-
-init_rules[xla.xla_call_p] = partial(_call_init_rule, xla.xla_call_p)
-
-
-def _fastpass(jaxpr, consts, args, old_env):
-  old_env, old_subenvs = old_env
-
-  def read(v):
-    if isinstance(v, jc.Literal):
-      return parray(v.val, true_mask(v.val))
-    else:
-      val = env[repr(v)]
-      assert isinstance(val, Parray)
-      return val
-
-  def read_old(v):
-    if isinstance(v, jc.Literal):
-      return parray(v.val, true_mask(v.val))
-    else:
-      val = old_env[repr(v)]
-      assert isinstance(val, Parray)
-      return val
-
-  def read_old_subenv(vs):
-    return old_subenvs[repr(vs)]
-
-  def write(v, val):
-    assert isinstance(val, Parray)
-    env[repr(v)] = val
-
-  def write_subenv(vs, env):
-    subenvs[repr(vs)] = env
-
-  def delete(v):
-    del env[repr(v)]
-
-  env = {}
-  subenvs = {}
-
-  write(jc.unitvar, parray(jc.unit, true_mask(jc.unit)))
-  map(write, jaxpr.constvars, consts)
-  map(write, jaxpr.invars, args)
+      raise NotImplementedError
+    map(write, eqn.outvars, map(LazyArray, eqn.outvars))
   for eqn in jaxpr.eqns:
-    in_vals = map(read, eqn.invars)
-    call_jaxpr, params = jc.extract_call_jaxpr(eqn.primitive, eqn.params)
-    old_outvals = map(read_old, eqn.outvars)
-    if eqn.primitive.multiple_results:
-      old_ans = old_outvals
+    invals = map(read, eqn.invars)
+    outvals = map(read, eqn.outvars)
+    new_eqn = jc.JaxprEqn(invals, outvals, eqn.primitive, eqn.params)
+    map(lambda arr: arr.set_eqn(new_eqn), outvals)
+  return map(read, jaxpr.outvars)
+
+def naryop_backward_rule(outbox, *in_avals, **params):
+  out_starts, out_shape = outbox
+  in_starts = [
+      [0 if s == 1 else o_start for s, o_start in zip(aval.shape, out_starts)]
+      if aval.shape else [] for aval in in_avals]
+  in_shapes = [
+      [1 if s == 1 else o_dim for s, o_dim in zip(aval.shape, out_shape)]
+      if aval.shape else [] for aval in in_avals]
+  in_counts = [
+      np.prod([o_dim if s == 1 else 1
+               for s, o_dim in zip(aval.shape, out_shape)])
+      if aval.shape else np.prod(out_shape) for aval in in_avals]
+  return zip(in_starts, in_shapes), in_counts
+
+def naryop_update_rule(op, cache, outbox, *invals, **params):
+  inboxes, _ = naryop_backward_rule(outbox, *map(get_aval, invals))
+  invals = [val if jnp.isscalar(val) else val[box_to_slice(box)]
+            for val, box in zip(invals, inboxes)]
+  return lax.dynamic_update_slice(cache, op.bind(*invals, **params), outbox[0])
+
+backward_rules[lax.add_p] = naryop_backward_rule
+update_rules[lax.add_p] = partial(naryop_update_rule, lax.add_p)
+
+def concatenate_backward_rule(outbox, *in_avals, **params):
+  dim = params['dimension']
+  outstart, outshape = map(list, outbox)
+  dimstart, dimshape  = outstart[dim], outshape[dim]
+  position = 0
+  inboxes = []
+  incounts = []
+  for a in in_avals:
+    if dimstart < position + a.shape[dim] and position < dimstart + dimshape:
+      instart = (outstart[:dim]
+                 + [max(0, dimstart - position)] + outstart[dim + 1:])
+      inshape = (outshape[:dim]
+                 + [min(position + a.shape[dim] - dimstart, a.shape[dim],
+                        dimshape)]
+                 + outshape[dim + 1:])
+      inboxes.append((instart, inshape))
+      incounts.append(np.ones(inshape, int))
     else:
-      old_ans = old_outvals[0]
-    in_vals = map(read, eqn.invars)
-    if call_jaxpr:
-      old_subenv = read_old_subenv(tuple(eqn.outvars))
-      ans, subenv = _get_update(eqn.primitive)(
-        params, call_jaxpr, in_vals, old_subenv)
-      write_subenv(tuple(eqn.outvars), subenv)
-    else:
-      ans = _get_update(eqn.primitive)(old_ans, *in_vals, **eqn.params)
-    if eqn.primitive.multiple_results:
-      map(write, eqn.outvars, ans)
-    else:
-      write(eqn.outvars[0], ans)
-  map(delete, jaxpr.constvars)
-  map(delete, jaxpr.invars)
-  delete(jc.unitvar)
-  return map(read, jaxpr.outvars), (env, subenvs)
+      inboxes.append(None)
+      incounts.append(None)
+    position = position + a.shape[dim]
+  return inboxes, incounts
 
+def concatenate_update_rule(cache, outbox, *invals, **params):
+  dim = params['dimension']
+  inboxes, _ = concatenate_backward_rule(outbox, *invals, **params)
+  invals = [val[box_to_slice(box)] for val, box in zip(invals, inboxes)
+            if box is not None]
+  out_start, _ = outbox
+  return lax.dynamic_update_slice(
+      cache, lax.concatenate(invals, dim), out_start)
 
-@lu.transformation_with_aux
-def _updated_fun(jaxpr, in_treedef, *all_args):
-  args, env = tree_unflatten(in_treedef, all_args)
-  out = yield (jaxpr, [], args, env), {}
-  out, out_treedef = tree_flatten(out)
-  yield out, out_treedef
+backward_rules[lax.concatenate_p] = concatenate_backward_rule
+update_rules[lax.concatenate_p] = concatenate_update_rule
 
+def slice_backward_rule(outbox, operand, start_indices, limit_indices, strides):
+  if strides is not None:
+    raise NotImplementedError
+  out_start, out_shape = outbox
+  in_start = np.add(out_start, start_indices)
+  return [(in_start, out_shape)], [np.ones(out_shape, int)]
 
-def _call_update_rule(primitive, params, jaxpr, in_vals, env):
-  all_args, in_treedef = tree_flatten((in_vals, env))
-  fun = lu.wrap_init(_fastpass)
-  fun, out_treedef = _updated_fun(fun, jaxpr, in_treedef)
-  out = primitive.bind(fun, *all_args, **params)
-  return tree_unflatten(out_treedef(), out)
+def slice_update_rule(cache, outbox, operand, start_indices, limit_indices,
+                      strides):
+  if strides is not None:
+    raise NotImplementedError
+  out_start, out_shape = outbox
+  in_start = np.add(out_start, start_indices)
+  return lax.dynamic_update_slice(
+      cache, lax.dynamic_slice(operand, in_start, out_shape), out_start)
 
+backward_rules[lax.slice_p] = slice_backward_rule
+update_rules[lax.slice_p] = slice_update_rule
 
-update_rules[xla.xla_call_p] = partial(_call_update_rule, xla.xla_call_p)
+def test_boxes(starts, sizes, dim):
+  assert sizes[dim] == 1
+  i = 1
+  while True:
+    yield tuple(start + i if d == dim else slice(start, start + size)
+                for d, (start, size) in enumerate(zip(starts, sizes)))
+    i = i + 1
 
+def box_finder(known, value):
+  it = np.nditer(known, flags=['multi_index'])
+  for k in it:
+    if k == value:
+      starts = it.multi_index
+      sizes = known.ndim * [1]
+      for d in range(known.ndim):
+        box_iter = test_boxes(starts, sizes, d)
+        while (starts[d] + sizes[d] < known.shape[d] and
+               np.all(known[next(box_iter)] == value)):
+          sizes[d] = sizes[d] + 1
+      yield starts, sizes
 
-class Parray(tuple):
-  """
-  Array which has been partially evaluated, represented by a pair
-      (arr, known)
-  where `known` is a boolean array with True where arr has been computed, and
-  values are fixed.  False where it hasn't yet. `arr` should be initialized to
-  zeros so that np.all(~known & arr == 0).
-  """
-  # TODO(j-towns): do we need to require uncomputed values to be zero?
-  def __repr__(self):
-    arr, mask = self
-    nan_unknowns = np.where(mask, arr, onp.nan)
-    with onp.printoptions(nanstr='- '):
-      r = repr(nan_unknowns)
-    return 'Parray<{}>'.format(r)
+def static_box_finder(known, value):
+  tmp = known == value
+  ret = []
+  for box in box_finder(tmp, 1):
+    ret.append(box)
+    tmp[box_to_slice(box)] = 0
+  return list(ret)
 
-def _flatten_parray(parray):
-  arr, known = parray
-  return [arr], Hashable(known)
-def _unflatten_parray(known, arr):
-  arr, = arr
-  return parray(arr, known.val)
-register_pytree_node(Parray, _flatten_parray, _unflatten_parray)
+if __name__ == "__main__":
+  from jax import make_jaxpr
 
-def parray(arr, known):
-  return arr.val if isinstance(arr, _DontWrap) else Parray((arr, known))
+  x = jnp.array([0., 0., 0., 0.])
+  z = jnp.array([5.])
 
-@cache()
-def _fastar_jaxpr(fun, in_tree, in_avals):
-  in_pvals = [pe.PartialVal((aval, jc.unit)) for aval in in_avals]
-  fun_flat, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
-  jaxpr, _, consts = pe.trace_to_jaxpr(fun_flat, in_pvals, stage_out=True)
-  jaxpr = submerge_consts(jaxpr, consts)
-  return jaxpr, [], out_tree()
+  jaxpr1 = make_jaxpr(
+      lambda x: lax.concatenate([z, lax.add(3., lax.slice(x, [0], [3]))], 0))(x)
+  jaxpr2 = tie_the_knot(jaxpr1)
 
-def _init_env(fun, args):
-  args_flat, in_tree = fastar_tree_flatten(args)
-  assert all(type(arg) is Parray for arg in args_flat)
-  avals = tuple(_get_aval(arg) for arg, _ in args_flat)
-  jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
-  consts = [parray(const, true_mask(const)) for const in consts]
-  ans, env = _firstpass(jaxpr, consts, args_flat)
-  # TODO(j-towns) could type-check ans
-  return tree_unflatten(out_tree, ans), env
-
-def _update_env(fun, args, env):
-  args_flat, in_tree = fastar_tree_flatten(args)
-  assert all(type(arg) is Parray for arg in args_flat)
-  avals = tuple(_get_aval(arg) for arg, _ in args_flat)
-  jaxpr, consts, out_tree = _fastar_jaxpr(fun, in_tree, avals)
-  # TODO(j-towns): Shouldn't need to re-wrap consts here
-  consts = [parray(const, true_mask(const)) for const in consts]
-  ans, env = _fastpass(jaxpr, consts, args_flat, env)
-  # TODO(j-towns) could type-check ans
-  return tree_unflatten(out_tree, ans), env
-
-## High level API
-def partial_eval(fun):
-  """Returns a pair init_fun, update_fun, for progressive evaluation of fun.
-
-  The input function is assumed to be part of a loop where intermediate values
-  are progressively evaluated, for example an autoregressive sampling loop. The
-  loop can be accelerated using elementwise partial evaluation. Before each call
-  to fun, each element of each array in *args is either 'known' or 'unknown'.
-  This state is indicated using a boolean mask, paired with each array. The pair
-  (arr, mask) must be wrapped in a `Parray`.
-
-  We require that each time fun is called, the inputs are at least as known as
-  the previous call, and that once an element is known its value cannot change.
-  Specifically if (arr_new, mask_new) are the current inputs and (arr_old,
-  mask_old) are the inputs to the previous call, we require that
-
-    1) mask_new >= mask_old                     (monotonically increasing mask)
-
-  and
-
-    2) all(arr_new[mask_old] == arr_old[mask_old])                (consistency)
-
-  Thus all intermediates can progressively become known (by updating elements of
-  a cache) and the outputs of the function also progressively become known. Each
-  element of the cache, and the outputs, are returned in Parray format (i.e. as
-  a pytree containing Parray(arr, mask) pairs.
-
-  Args:
-    fun: Function to be partially evaluated.
-
-  Returns:
-    A pair (init, update), both functions, init taking in *args which are the
-      same as the arguments for fun, but replacing each array with a Parray,
-      that is a pair (arr, mask), where mask indicates which values are 'known'.
-      init returns a pair (out, cache). The update takes arguments cache, *args,
-      with cache in the format returned by init, and args in the same format as
-      described for init. The update returns an updated (out, cache) pair.
-  """
-  def init(*args):
-    """
-    Initializes and performs first update, returning (output, cache).
-    """
-    return _init_env(fun, args)
-
-  def update(cache, *args):
-    """Returns updated (output, cache)."""
-    # TODO(j-towns): check that knowns are greater than or equal to previous
-    # update
-    return _update_env(fun, args, cache)
-
-  return init, update
+  out, = lazy_eval_jaxpr(jaxpr2.jaxpr, jaxpr2.literals)
