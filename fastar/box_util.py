@@ -33,10 +33,19 @@ def slice_to_box(shape, sl):
       raise ValueError("Start of slice is outside of array.")
     stop = arr_dim if stop is None else stop
     if stop < 0 or stop > arr_dim:
-      raise ValueError("Stop of slice is outside of array.")
+      raise ValueError("End of slice is outside of array.")
     starts.append(start)
     dims.append(stop - start)
   return (starts, dims), set(int_dims)
+
+def setbox(arr, box, val):
+  arr[box_to_slice(box)] = val
+
+def addbox(arr, box, val):
+  arr[box_to_slice(box)] += val
+
+def getbox(arr, box):
+  return arr[box_to_slice(box)]
 
 def test_boxes(starts, sizes, dim):
   assert sizes[dim] == 1

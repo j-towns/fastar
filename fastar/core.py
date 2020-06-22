@@ -6,7 +6,8 @@ from jax import make_jaxpr
 from jax import lax
 from jax.ops import index_update
 from fastar.box_util import (
-    box_to_slice, slice_to_box, box_finder, static_box_finder)
+    box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
+    addbox)
 import numpy as np
 
 
@@ -53,74 +54,67 @@ class LazyArray(object):
 
   def _compute_ancestral_child_counts(self, box):
     invals, outvals, primitive, params = self.eqn
-    in_avals = map(get_aval, invals)
     local_state = self.state[box_to_slice(box)] if self.shape else self.state
     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
-    for u_box in box_finder(local_state, UNKNOWN):
-      local_state[box_to_slice(u_box)] = REQUESTED
+    for ubox in box_finder(local_state, UNKNOWN):
+      setbox(local_state, ubox, REQUESTED)
       if primitive.multiple_results:
         # TODO: pass var_idx to the backward rule
         raise NotImplementedError
       else:
-        inboxes, counts = backward_rules[primitive](
-            to_global_coords(u_box), *in_avals, **params)
-        for ival, ibox, count in zip(invals, inboxes, counts):
-          if isinstance(ival, LazyArray) and ibox is not None:
-            ival.child_counts[box_to_slice(ibox)] += (
-                count * (ival.state[box_to_slice(ibox)] != KNOWN))
+        instarts, counts = backward_rules[primitive](
+            to_global_coords(ubox), *invals, **params)
+        for ival, istart, count in zip(invals, instarts, counts):
+          if isinstance(ival, LazyArray) and istart is not None:
+            ibox = istart, count.shape
+            addbox(ival.child_counts, ibox,
+                   count * (getbox(ival.state, ibox) != KNOWN))
             ival._compute_ancestral_child_counts(ibox)
 
   def _toposort(self, box):
     self._compute_ancestral_child_counts(box)
     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
     sorted_boxes = []
-    local_child_counts = (self.child_counts[box_to_slice(box)] if self.shape
+    local_child_counts = (getbox(self.child_counts, box) if self.shape
                           else self.child_counts)
     childless_boxes = [
         (self, to_global_coords(b)) for b in static_box_finder(
-            (local_child_counts == 0)
-            & (self.state[box_to_slice(box)] != KNOWN), 1)]
+            (local_child_counts == 0) & (getbox(self.state, box) != KNOWN), 1)]
     while childless_boxes:
       arr, box = childless_boxes.pop()
       sorted_boxes.append((arr, box))
       invals, _, primitive, params = arr.eqn
-      in_avals = map(get_aval, invals)
-      inboxes, counts = backward_rules[primitive](box, *in_avals, **params)
-      for ival, ibox, count in zip(invals, inboxes, counts):
-        if isinstance(ival, LazyArray) and ibox is not None:
-          to_iglobal_coords = lambda b: (np.add(ibox[0], b[0]), b[1])
-          ichild_counts = (ival.child_counts[box_to_slice(ibox)] if ival.shape
+      instarts, counts = backward_rules[primitive](box, *invals, **params)
+      for ival, istart, count in zip(invals, instarts, counts):
+        if isinstance(ival, LazyArray) and istart is not None:
+          ibox = istart, count.shape
+          to_iglobal_coords = lambda b: (np.add(istart, b[0]), b[1])
+          ichild_counts = (getbox(ival.child_counts, ibox) if ival.shape
                            else ival.child_counts)
-          ichild_counts -= (count * (ival.state[box_to_slice(ibox)] != KNOWN))
+          ichild_counts -= (count * (getbox(ival.state, ibox) != KNOWN))
           childless_boxes.extend(
               [(ival, to_iglobal_coords(b))
                for b in static_box_finder(
                    (ichild_counts == 0) &
-                   (ival.state[box_to_slice(ibox)] != KNOWN), 1)])
+                   (getbox(ival.state, ibox) != KNOWN), 1)])
     return sorted_boxes[::-1]
 
-  def getbox(self, box):
+  def _getbox(self, box):
     assert np.shape(box) == (2, self.ndim)
-    for arr, u_box in self._toposort(box):
+    for arr, ubox in self._toposort(box):
       invals, _, primitive, params = arr.eqn
       if primitive.multiple_results:
         raise NotImplementedError
       else:
         invals = [v.cache if isinstance(v, LazyArray) else v for v in invals]
-        arr.cache = update_rules[primitive](arr.cache, u_box, *invals, **params)
-        arr.state[box_to_slice(u_box)] = KNOWN
+        arr.cache = update_rules[primitive](arr.cache, ubox, *invals, **params)
+        setbox(arr.state, ubox, KNOWN)
     return self.cache[box_to_slice(box)]
 
   def __getitem__(self, idx):
     box, int_dims = slice_to_box(self.shape, idx)
-    return self.getbox(box)[tuple(0 if i in int_dims else slice(None)
-                                  for i in range(self.ndim))]
-
-def get_aval(x):
-  if isinstance(x, LazyArray):
-    return x._aval
-  else:
-    return jc.get_aval(x)
+    return self._getbox(box)[
+        tuple(0 if i in int_dims else slice(None) for i in range(self.ndim))]
 
 def lazy_eval_jaxpr(jaxpr, consts, *args):
   def read(v):
@@ -147,3 +141,9 @@ def lazy_eval_jaxpr(jaxpr, consts, *args):
     new_eqn = jc.JaxprEqn(invals, outvals, eqn.primitive, eqn.params)
     map(lambda arr: arr.set_eqn(new_eqn), outvals)
   return map(read, jaxpr.outvars)
+
+def get_aval(x):
+  if isinstance(x, LazyArray):
+    return x._aval
+  else:
+    return jc.get_aval(x)
