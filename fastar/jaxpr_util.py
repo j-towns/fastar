@@ -1,8 +1,10 @@
 from jax import linear_util as lu
 from jax.tree_util import tree_unflatten, tree_flatten
 from jax.util import safe_map, unzip2
-from jax.core import Literal, Jaxpr, JaxprEqn, Var
+from jax.core import Literal, Jaxpr, JaxprEqn, Var, TypedJaxpr
 from jax import tree_util
+from jax.interpreters import xla
+import jax.interpreters.partial_eval as pe
 import jax.core as jc
 from functools import partial
 
@@ -11,6 +13,15 @@ from jax import tree_util
 
 
 map = safe_map
+
+def fastar_jaxpr(flat_fun, *args_flat):
+  in_avals = map(xla.abstractify, args_flat)
+  in_pvals = map(pe.PartialVal.unknown, in_avals)
+  jaxpr, out_pvals, consts = pe.trace_to_jaxpr(
+      flat_fun, in_pvals, instantiate=True, stage_out=True)
+  out_avals = [v.get_aval() for v in out_pvals]
+  return TypedJaxpr(submerge_consts(jaxpr, consts), [], in_avals, out_avals)
+
 
 def tie_the_knot(typed_jaxpr):
   jaxpr, _, in_avals, out_avals = typed_jaxpr
@@ -93,5 +104,6 @@ def submerge_consts(jaxpr, consts, invals=None):
         new_invars = [var if isinstance(var, (Var, Literal)) else Literal_(var)
                       for var in new_invars]
       new_eqns.append(JaxprEqn(invars=new_invars, outvars=eqn.outvars,
-                               primitive=eqn.primitive, params=new_params))
+                               primitive=eqn.primitive, params=new_params,
+                               source_info=eqn.source_info))
   return Jaxpr([], new_jaxpr_invars, jaxpr.outvars, new_eqns)

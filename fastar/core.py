@@ -8,6 +8,7 @@ from jax.ops import index_update
 from fastar.box_util import (
     box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
     addbox)
+from fastar.jaxpr_util import Literal_
 import numpy as np
 
 
@@ -53,7 +54,7 @@ class LazyArray(object):
     return self.cache.aval
 
   def _compute_ancestral_child_counts(self, box):
-    invals, outvals, primitive, params = self.eqn
+    invals, outvals, primitive, params, _ = self.eqn
     local_state = self.state[box_to_slice(box)] if self.shape else self.state
     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
     for ubox in box_finder(local_state, UNKNOWN):
@@ -83,7 +84,7 @@ class LazyArray(object):
     while childless_boxes:
       arr, box = childless_boxes.pop()
       sorted_boxes.append((arr, box))
-      invals, _, primitive, params = arr.eqn
+      invals, _, primitive, params, _ = arr.eqn
       instarts, counts = backward_rules[primitive](box, *invals, **params)
       for ival, istart, count in zip(invals, instarts, counts):
         if isinstance(ival, LazyArray) and istart is not None:
@@ -102,7 +103,7 @@ class LazyArray(object):
   def _getbox(self, box):
     assert np.shape(box) == (2, self.ndim)
     for arr, ubox in self._toposort(box):
-      invals, _, primitive, params = arr.eqn
+      invals, _, primitive, params, _ = arr.eqn
       if primitive.multiple_results:
         raise NotImplementedError
       else:
@@ -118,7 +119,7 @@ class LazyArray(object):
 
 def lazy_eval_jaxpr(jaxpr, consts, *args):
   def read(v):
-    if type(v) is jc.Literal:
+    if type(v) in {jc.Literal, Literal_}:
       return v.val
     else:
       return env[v]
@@ -138,7 +139,8 @@ def lazy_eval_jaxpr(jaxpr, consts, *args):
   for eqn in jaxpr.eqns:
     invals = map(read, eqn.invars)
     outvals = map(read, eqn.outvars)
-    new_eqn = jc.JaxprEqn(invals, outvals, eqn.primitive, eqn.params)
+    new_eqn = jc.JaxprEqn(invals, outvals, eqn.primitive, eqn.params,
+                          eqn.source_info)
     map(lambda arr: arr.set_eqn(new_eqn), outvals)
   return map(read, jaxpr.outvars)
 

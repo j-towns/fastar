@@ -35,10 +35,76 @@ def naryop_update_rule(op, cache, outbox, *invals, **params):
             for val, box in zip(invals, inboxes)]
   return lax.dynamic_update_slice(cache, op.bind(*invals, **params), outbox[0])
 
-backward_rules[lax.add_p] = naryop_backward_rule
-update_rules[lax.add_p] = partial(naryop_update_rule, lax.add_p)
+naryops = [
+    lax.lt_p,
+    lax.le_p,
+    lax.gt_p,
+    lax.ge_p,
+    lax.ne_p,
+    lax.eq_p,
+    lax.shift_right_logical_p,
+    lax.shift_right_arithmetic_p,
+    lax.shift_left_p,
+    lax.min_p,
+    lax.max_p,
+    lax.rem_p,
+    lax.div_p,
+    lax.mul_p,
+    lax.sub_p,
+    lax.add_p,
+    lax.population_count_p,
+    lax.xor_p,
+    lax.or_p,
+    lax.and_p,
+    lax.not_p,
+    lax.pow_p,
+    lax.rsqrt_p,
+    lax.sqrt_p,
+    lax.abs_p,
+    lax.conj_p,
+    lax.complex_p,
+    lax.imag_p,
+    lax.real_p,
+    lax.erf_inv_p,
+    lax.erfc_p,
+    lax.erf_p,
+    lax.bessel_i1e_p,
+    lax.bessel_i0e_p,
+    lax.igammac_p,
+    lax.igamma_grad_a_p,
+    lax.igamma_p,
+    lax.digamma_p,
+    lax.lgamma_p,
+    lax.regularized_incomplete_beta_p,
+    lax.atanh_p,
+    lax.acosh_p,
+    lax.asinh_p,
+    lax.cosh_p,
+    lax.sinh_p,
+    lax.atan2_p,
+    lax.cos_p,
+    lax.sin_p,
+    lax.tanh_p,
+    lax.log1p_p,
+    lax.expm1_p,
+    lax.log_p,
+    lax.exp_p,
+    lax.is_finite_p,
+    lax.round_p,
+    lax.ceil_p,
+    lax.floor_p,
+    lax.nextafter_p,
+    lax.sign_p,
+    lax.neg_p,
+    lax.select_p,
+]
+
+for op in naryops:
+  backward_rules[op] = naryop_backward_rule
+  update_rules[op] = partial(naryop_update_rule, op)
 
 def concatenate_backward_rule(outbox, *invals, **params):
+  # from IPython.terminal.debugger import set_trace; set_trace()
   dim = params['dimension']
   outstart, outshape = map(list, outbox)
   dimstart, dimshape  = outstart[dim], outshape[dim]
@@ -51,7 +117,7 @@ def concatenate_backward_rule(outbox, *invals, **params):
       instart = (outstart[:dim]
                  + [max(0, dimstart - position)] + outstart[dim + 1:])
       inshape = (outshape[:dim]
-                 + [min(dimstart + dimshape - position, v_shape[dim],
+                 + [min(dimstart + dimshape - position, v_shape[dim], dimshape,
                         position + v_shape[dim] - instart[dim])]
                  + outshape[dim + 1:])
       instarts.append(instart)
@@ -94,3 +160,7 @@ def slice_update_rule(cache, outbox, operand, start_indices, limit_indices,
 
 backward_rules[lax.slice_p] = slice_backward_rule
 update_rules[lax.slice_p] = slice_update_rule
+
+def broadcast_in_dim_backward_rule(
+    outbox, operand, shape, broadcast_dimensions):
+  pass
