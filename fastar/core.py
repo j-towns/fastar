@@ -107,6 +107,10 @@ class LazyArray(object):
       if primitive.multiple_results:
         raise NotImplementedError
       else:
+        # TODO (j-towns): add option to disable this assert statement
+        # Check that none of this box has already been computed
+        assert np.all(getbox(arr.state, ubox) == REQUESTED), \
+            'Attempt to repeat computation detected'
         invals = [v.cache if isinstance(v, LazyArray) else v for v in invals]
         arr.cache = update_rules[primitive](arr.cache, ubox, *invals, **params)
         setbox(arr.state, ubox, KNOWN)
