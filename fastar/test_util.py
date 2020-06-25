@@ -39,6 +39,17 @@ def check_child_counts(arrs):
         _check_child_counts(arr.eqn.invars)
   _check_child_counts(arrs)
 
+def check_state(arrs):
+  # Make sure none of the elements are in the temporary REQUESTED state
+  visited = set()
+  def _check_state(arrs):
+    for arr in arrs:
+      if isinstance(arr, LazyArray) and arr not in visited:
+        assert np.all((arr.state == 0) | (arr.state == 1))
+        visited.add(arr)
+        _check_state(arr.eqn.invars)
+  _check_state(arrs)
+
 
 def check_lazy_fun(fun, *args, atol=None, rtol=None):
   out_expected_flat, out_expected_tree = tree_flatten(fun(*args))
@@ -47,6 +58,7 @@ def check_lazy_fun(fun, *args, atol=None, rtol=None):
   tree_multimap(check_shape_and_dtype, out_expected_flat, out_flat)
   jtu.check_close(out_expected_flat, [o[:] for o in out_flat], atol, rtol)
   check_child_counts(out_flat)
+  check_state(out_flat)
   out_flat, _ = tree_flatten(lazy_eval(fun, *args))
   indices = []
   for n, o in enumerate(out_flat):
@@ -58,6 +70,7 @@ def check_lazy_fun(fun, *args, atol=None, rtol=None):
     jtu.check_close(out_flat[n][i], out_expected_flat[n][i], atol, rtol)
     assert np.dtype(out_flat[n][i]) == np.dtype(out_expected_flat[n][i])
   check_child_counts(out_flat)
+  check_state(out_flat)
 
 def check_lazy_fixed_point(fun, mock_arg, atol=None, rtol=None):
   out_expected_flat, out_expected_tree = tree_flatten(
@@ -67,6 +80,7 @@ def check_lazy_fixed_point(fun, mock_arg, atol=None, rtol=None):
   tree_multimap(check_shape_and_dtype, out_expected_flat, out_flat)
   jtu.check_close(out_expected_flat, [o[:] for o in out_flat], atol, rtol)
   check_child_counts(out_flat)
+  check_state(out_flat)
   out_flat, out_tree = tree_flatten(lazy_eval_fixed_point(fun, mock_arg))
   indices = []
   for n, o in enumerate(out_flat):
@@ -78,3 +92,4 @@ def check_lazy_fixed_point(fun, mock_arg, atol=None, rtol=None):
     jtu.check_close(out_flat[n][i], out_expected_flat[n][i], atol, rtol)
     assert np.dtype(out_flat[n][i]) == np.dtype(out_expected_flat[n][i])
   check_child_counts(out_flat)
+  check_state(out_flat)
