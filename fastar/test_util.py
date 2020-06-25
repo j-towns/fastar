@@ -20,18 +20,19 @@ def check_shape_and_dtype(expected, actual):
   assert expected.shape == actual.shape
   assert expected.dtype == actual.dtype
 
-def check_lazy_fun(fun, *args):
+def check_lazy_fun(fun, *args, atol=None, rtol=None):
   out_expected_flat, out_expected_tree = tree_flatten(fun(*args))
   out_flat, out_tree = tree_flatten(lazy_eval(fun, *args))
   assert out_expected_tree == out_tree
   tree_multimap(check_shape_and_dtype, out_expected_flat, out_flat)
-  jtu.check_eq(out_expected_flat, [o[:] for o in out_flat])
+  jtu.check_close(out_expected_flat, [o[:] for o in out_flat], atol, rtol)
   out_flat, _ = tree_flatten(lazy_eval(fun, *args))
   indices = []
   for n, o in enumerate(out_flat):
     indices.append([(n, i) for i in np.ndindex(*o.shape)])
   indices = list(chain(*indices))
   shuffle(indices)
+  indices = indices[:5]
   for n, i in indices:
-    assert out_flat[n][i] == out_expected_flat[n][i]
+    jtu.check_close(out_flat[n][i], out_expected_flat[n][i], atol, rtol)
     assert np.dtype(out_flat[n][i]) == np.dtype(out_expected_flat[n][i])

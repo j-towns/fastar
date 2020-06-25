@@ -1,23 +1,23 @@
-from functools import partial
-
-from pytest import mark
-import numpy as onp
-
-import jax.scipy.special as special
-import numpy as onp
-from jax import jit
-from jax import lax
-from absl.testing import parameterized
-
-from fastar.test_util import check
-
-
-rng = onp.random.RandomState(0)
-
-randn   =     lambda shape: onp.float32(rng.randn(*shape))
-randpos =     lambda shape: onp.float32(onp.abs(rng.randn(*shape)))
-randuniform = lambda shape: onp.float32(rng.rand(*shape))
-randbool =    lambda shape: rng.randn(*shape) > rng.randn(*shape)
+# from functools import partial
+# 
+# from pytest import mark
+# import numpy as onp
+# 
+# import jax.scipy.special as special
+# import numpy as onp
+# from jax import jit
+# from jax import lax
+# from absl.testing import parameterized
+# 
+# from fastar.test_util import check
+# 
+# 
+# rng = onp.random.RandomState(0)
+# 
+# randn   =     lambda shape: onp.float32(rng.randn(*shape))
+# randpos =     lambda shape: onp.float32(onp.abs(rng.randn(*shape)))
+# randuniform = lambda shape: onp.float32(rng.rand(*shape))
+# randbool =    lambda shape: rng.randn(*shape) > rng.randn(*shape)
 
 
 # Unary elementwise operations

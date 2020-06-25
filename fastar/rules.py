@@ -97,6 +97,7 @@ naryops = [
     lax.sign_p,
     lax.neg_p,
     lax.select_p,
+    lax.integer_pow_p,
 ]
 
 for op in naryops:

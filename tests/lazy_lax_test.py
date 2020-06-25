@@ -12,6 +12,7 @@ from jax import lax
 import fastar.test_util as tu
 
 # This is borrowed from lax_tests.py in the JAX tests directory.
+# TODO import directly from lax_tests.py
 
 def supported_dtypes(dtypes):
   return [t for t in dtypes if t in jtu.supported_dtypes()]
@@ -43,8 +44,9 @@ LAX_OPS = [
     op_record("floor", 1, float_dtypes, jtu.rand_small),
     op_record("ceil", 1, float_dtypes, jtu.rand_small),
     op_record("round", 1, float_dtypes, jtu.rand_default),
-    op_record("nextafter", 2, [f for f in float_dtypes if f != dtypes.bfloat16],
-              jtu.rand_default, tol=0),
+    # TODO (j-towns): requires lax.broadcast_in_dim
+    # op_record("nextafter", 2, [f for f in float_dtypes if f != dtypes.bfloat16],
+    #           jtu.rand_default, tol=0),
 
     op_record("is_finite", 1, float_dtypes, jtu.rand_small),
 
@@ -68,9 +70,12 @@ LAX_OPS = [
     op_record("rsqrt", 1, float_dtypes + complex_dtypes, jtu.rand_positive),
     op_record("square", 1, float_dtypes + complex_dtypes, jtu.rand_default),
     op_record("reciprocal", 1, float_dtypes + complex_dtypes, jtu.rand_positive),
-    op_record("tan", 1, float_dtypes, jtu.rand_default, {np.float32: 3e-5}),
-    op_record("asin", 1, float_dtypes, jtu.rand_small),
-    op_record("acos", 1, float_dtypes, jtu.rand_small),
+    # TODO (j-towns): requires jit
+    # op_record("tan", 1, float_dtypes, jtu.rand_default, {np.float32: 3e-5}),
+    # TODO (j-towns): requires jit
+    # op_record("asin", 1, float_dtypes, jtu.rand_small),
+    # TODO (j-towns): requires jit
+    # op_record("acos", 1, float_dtypes, jtu.rand_small),
     op_record("atan", 1, float_dtypes, jtu.rand_small),
     op_record("asinh", 1, float_dtypes, jtu.rand_default),
     op_record("acosh", 1, float_dtypes, jtu.rand_positive),
@@ -102,7 +107,8 @@ LAX_OPS = [
 
     op_record("real", 1, complex_dtypes, jtu.rand_default),
     op_record("imag", 1, complex_dtypes, jtu.rand_default),
-    op_record("complex", 2, complex_elem_dtypes, jtu.rand_default),
+    # TODO (j-towns) requires lax.broadcast_in_dim
+    # op_record("complex", 2, complex_elem_dtypes, jtu.rand_default),
     op_record("conj", 1, complex_elem_dtypes + complex_dtypes,
               jtu.rand_default),
     op_record("abs", 1, default_dtypes + complex_dtypes, jtu.rand_default),
@@ -143,4 +149,4 @@ LAX_OPS = [
 def test_lazy(op_name, rng_factory, shapes, dtype, tol):
     rng = rng_factory(np.random)
     args = [rng(shape, dtype) for shape in shapes]
-    tu.check_lazy_fun(getattr(lax, op_name), *args)
+    tu.check_lazy_fun(getattr(lax, op_name), *args, atol=tol, rtol=tol)
