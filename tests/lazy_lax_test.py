@@ -147,6 +147,6 @@ LAX_OPS = [
      for shapes in CombosWithReplacement(shape_group, rec.nargs)
      for dtype in rec.dtypes])
 def test_lazy(op_name, rng_factory, shapes, dtype, tol):
-    rng = rng_factory(np.random)
-    args = [rng(shape, dtype) for shape in shapes]
-    tu.check_lazy_fun(getattr(lax, op_name), *args, atol=tol, rtol=tol)
+  rng = rng_factory(np.random)
+  args = [rng(shape, dtype) for shape in shapes]
+  tu.check_lazy_fun(getattr(lax, op_name), *args, atol=tol, rtol=tol)
