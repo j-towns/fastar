@@ -150,3 +150,19 @@ def test_lazy(op_name, rng_factory, shapes, dtype, tol):
   rng = rng_factory(np.random)
   args = [rng(shape, dtype) for shape in shapes]
   tu.check_lazy_fun(getattr(lax, op_name), *args, atol=tol, rtol=tol)
+
+@pytest.mark.parametrize(
+    'dim,base_shape,dtype,num_arrs,rng_factory',
+    [(dim, base_shape, dtype, num_arrs, rng_factory)
+     for num_arrs in [3]
+     for dtype in default_dtypes
+     for base_shape in [(4,), (3, 4), (2, 3, 4)]
+     for dim in range(len(base_shape))
+     for rng_factory in [jtu.rand_default]])
+def test_concatenate(dim, base_shape, dtype, num_arrs, rng_factory):
+  rng = rng_factory(np.random)
+  shapes = [base_shape[:dim] + (size,) + base_shape[dim+1:]
+            for size, _ in zip(itertools.cycle([3, 1, 4]), range(num_arrs))]
+  args = [rng(shape, dtype) for shape in shapes]
+  op = lambda *args: lax.concatenate(args, dim)
+  tu.check_lazy_fun(op, *args)
