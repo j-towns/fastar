@@ -18,12 +18,12 @@ def lazy_eval(fun, *args):
       assert core.get_aval(out) == aval
     return tree_util.tree_unflatten(out_tree(), outs_flat)
 
-def lazy_eval_fixed_point(fun, *mock_args):
-    args_flat, in_tree  = tree_util.tree_flatten(mock_args)
+def lazy_eval_fixed_point(fun, mock_arg):
+    arg_flat, in_tree = tree_util.tree_flatten([mock_arg])
     f = lu.wrap_init(fun)
     flat_fun, out_tree = flatten_fun_nokwargs(f, in_tree)
     jaxpr, consts, _, out_avals = tie_the_knot(
-        fastar_jaxpr(flat_fun, *args_flat))
+        fastar_jaxpr(flat_fun, *arg_flat))
     outs_flat = core.lazy_eval_jaxpr(jaxpr, consts)
     for out, aval in zip(outs_flat, out_avals):
       assert core.get_aval(out) == aval

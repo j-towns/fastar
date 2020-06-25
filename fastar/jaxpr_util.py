@@ -30,7 +30,8 @@ def tie_the_knot(typed_jaxpr):
   def replace(eqn):
     invars = [in2out[i] if (isinstance(i, jc.Var) and i in in2out) else i
               for i in eqn.invars]
-    return jc.JaxprEqn(invars, eqn.outvars, eqn.primitive, eqn.params)
+    return jc.JaxprEqn(invars, eqn.outvars, eqn.primitive, eqn.params,
+                       eqn.source_info)
   eqns = [replace(eqn) for eqn in jaxpr.eqns]
   new_jaxpr = jc.Jaxpr(jaxpr.constvars, [], jaxpr.outvars, eqns)
   return jc.TypedJaxpr(new_jaxpr, typed_jaxpr.literals, [],
