@@ -166,3 +166,26 @@ def test_concatenate(dim, base_shape, dtype, num_arrs, rng_factory):
   args = [rng(shape, dtype) for shape in shapes]
   op = lambda *args: lax.concatenate(args, dim)
   tu.check_lazy_fun(op, *args)
+
+@pytest.mark.parametrize(
+    'shape,dtype,starts,limits,strides,rng_factory',
+    [(shape, dtype, start_indices, limit_indices, strides, rng_factory)
+     for shape, start_indices, limit_indices, strides in [
+         [(3,), (1,), (2,), None],
+         [(7,), (4,), (7,), None],
+         [(5,), (1,), (5,), (2,)],
+         [(8,), (1,), (6,), (2,)],
+         [(5, 3), (1, 1), (3, 2), None],
+         [(5, 3), (1, 1), (3, 1), None],
+         [(7, 5, 3), (4, 0, 1), (7, 1, 3), None],
+         [(5, 3), (1, 1), (2, 1), (1, 1)],
+         [(5, 3), (1, 1), (5, 3), (2, 1)],
+         ]
+     for dtype in default_dtypes
+     for rng_factory in [jtu.rand_default]
+     if strides is None])
+def test_slice(shape, dtype, starts, limits, strides, rng_factory):
+  rng = rng_factory(np.random)
+  args = [rng(shape, dtype)]
+  op = lambda x: lax.slice(x, starts, limits, strides)
+  tu.check_lazy_fun(op, *args)

@@ -145,7 +145,7 @@ update_rules[lax.concatenate_p] = concatenate_update_rule
 
 def slice_backward_rule(outbox, operand, start_indices, limit_indices, strides):
   if strides is not None:
-    raise NotImplementedError
+    raise NotImplementedError('Strided slice is not yet implemented')
   out_start, out_shape = outbox
   in_start = np.add(out_start, start_indices)
   return [in_start], [np.ones(out_shape, int)]
@@ -153,7 +153,7 @@ def slice_backward_rule(outbox, operand, start_indices, limit_indices, strides):
 def slice_update_rule(cache, outbox, operand, start_indices, limit_indices,
                       strides):
   if strides is not None:
-    raise NotImplementedError
+    raise NotImplementedError('Strided slice is not yet implemented')
   out_start, out_shape = outbox
   in_start = np.add(out_start, start_indices)
   return lax.dynamic_update_slice(

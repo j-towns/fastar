@@ -42,6 +42,10 @@ class LazyArray(object):
     return self.cache.shape
 
   @property
+  def size(self):
+    return self.cache.size
+
+  @property
   def dtype(self):
     return self.cache.dtype
 
@@ -117,9 +121,12 @@ class LazyArray(object):
     return self.cache[box_to_slice(box)]
 
   def __getitem__(self, idx):
-    box, int_dims = slice_to_box(self.shape, idx)
-    return self._getbox(box)[
-        tuple(0 if i in int_dims else slice(None) for i in range(self.ndim))]
+    if self.size:
+      box, int_dims = slice_to_box(self.shape, idx)
+      return self._getbox(box)[
+          tuple(0 if i in int_dims else slice(None) for i in range(self.ndim))]
+    else:
+      return jnp.zeros(self.shape, self.dtype)
 
 def lazy_eval_jaxpr(jaxpr, consts, *args):
   def read(v):
