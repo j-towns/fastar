@@ -1,11 +1,16 @@
+import numpy as np
+
 from jax import linear_util as lu
 from jax.tree_util import tree_unflatten, tree_flatten
 from jax.util import safe_map, unzip2
 from jax.core import Literal, Jaxpr, JaxprEqn, Var, TypedJaxpr
 from jax import tree_util
 from jax.interpreters import xla
+from jax.interpreters import masking
 import jax.interpreters.partial_eval as pe
+from jax import ShapedArray
 import jax.core as jc
+from jax import dtypes
 from functools import partial
 
 import numpy as onp
@@ -14,14 +19,38 @@ from jax import tree_util
 
 map = safe_map
 
+def inf_to_poly(shape):
+  return masking.parse_spec(str(shape).replace('inf', 'n'))
+
+def eval_inf_dims(jaxpr):
+  def _eval_inf_dims(shape):
+    new_shape = []
+    for poly in shape:
+      # Check that poly is linear
+      poly = poly.copy()
+      const_coeff = poly.pop(Mon({}), 0)
+      (mon, linear_coeff), = poly.items()
+      (id, index), = mon.items()
+      if index != 1: raise ShapeError
+      # new_shape.append(masking.eval_poly...)
+
+
 def fastar_jaxpr(flat_fun, *args_flat):
-  in_avals = map(xla.abstractify, args_flat)
+  unique_ids = masking.UniqueIds()
+  in_specs = [inf_to_poly(np.shape(arg)) for arg in args_flat]
+  in_specs = map(masking.parse_spec, in_specs)
+  in_specs = map(partial(masking.remap_ids, unique_ids), in_specs)
+
+  def abstractify(x):
+    shape = np.shape(x)
+    shape = inf_to_poly(shape) if any(d == np.inf for d in shape) else shape
+    return ShapedArray(shape, dtypes.result_type(x))
+  in_avals = map(abstractify, args_flat)
   in_pvals = map(pe.PartialVal.unknown, in_avals)
   jaxpr, out_pvals, consts = pe.trace_to_jaxpr(
       flat_fun, in_pvals, instantiate=True, stage_out=True)
   out_avals = [v.get_aval() for v in out_pvals]
   return TypedJaxpr(submerge_consts(jaxpr, consts), [], in_avals, out_avals)
-
 
 def tie_the_knot(typed_jaxpr):
   jaxpr, _, in_avals, out_avals = typed_jaxpr
