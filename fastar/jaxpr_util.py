@@ -1,3 +1,5 @@
+import numpy as np
+
 from jax import linear_util as lu
 from jax.tree_util import tree_unflatten, tree_flatten
 from jax.util import safe_map, unzip2
@@ -5,7 +7,10 @@ from jax.core import Literal, Jaxpr, JaxprEqn, Var, TypedJaxpr
 from jax import tree_util
 from jax.interpreters import xla
 import jax.interpreters.partial_eval as pe
+from jax import ShapedArray
+from jax import abstract_arrays
 import jax.core as jc
+from jax import dtypes
 from functools import partial
 
 import numpy as onp
@@ -14,14 +19,62 @@ from jax import tree_util
 
 map = safe_map
 
+class InfShapeError(Exception): pass
+
+class InfType:
+  neg: bool
+
+  def __init__(self, neg=False):
+    self.neg = neg
+
+  def __add__(self, other):
+    if isinstance(other, InfType) and self.neg != other.neg:
+      raise InfShapeError
+    else:
+      return _neginf if self.neg else inf
+
+  def __sub__(self, other):
+    if isinstance(other, InfType) and self.neg == other.neg:
+      raise InfShapeError
+    else:
+      return _neginf if self.neg else inf
+
+  def __neg__(self):
+    if self.neg:
+      return inf
+    else:
+      return _neginf
+
+  def __mul__(self, other):
+    if not isinstance(other, InfType) and other == 0:
+      raise InfShapeError
+    other_neg = other.neg if isinstance(other, InfType) else other < 0
+    return inf if other_neg == self.neg else _neginf
+
+  def __str__(self):
+    if self.neg:
+      return '-inf'
+    else:
+      return 'inf'
+
+  def __repr__(self):
+    return __str__(self)
+
+
+abstract_arrays._DIMENSION_TYPES.add(InfType)
+
+inf = InfType()
+_neginf = InfType(neg=True)
+
 def fastar_jaxpr(flat_fun, *args_flat):
-  in_avals = map(xla.abstractify, args_flat)
+  def abstractify(x):
+    return ShapedArray(np.shape(x), dtypes.result_type(x))
+  in_avals = map(abstractify, args_flat)
   in_pvals = map(pe.PartialVal.unknown, in_avals)
   jaxpr, out_pvals, consts = pe.trace_to_jaxpr(
       flat_fun, in_pvals, instantiate=True, stage_out=True)
   out_avals = [v.get_aval() for v in out_pvals]
   return TypedJaxpr(submerge_consts(jaxpr, consts), [], in_avals, out_avals)
-
 
 def tie_the_knot(typed_jaxpr):
   jaxpr, _, in_avals, out_avals = typed_jaxpr
