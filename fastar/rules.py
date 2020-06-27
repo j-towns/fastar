@@ -221,7 +221,19 @@ def broadcast_in_dim_backward_rule(
       factor *= out_shape[d]
   return [in_start], [np.ones(in_shape, int) * factor]
 
-def_standard_op(lax.broadcast_in_dim_p, broadcast_in_dim_backward_rule)
+def broadcast_in_dim_update_rule(cache, outbox, operand, shape,
+                                 broadcast_dimensions):
+  out_start, out_shape = outbox
+  (in_start,), (in_count,) = broadcast_in_dim_backward_rule(
+      outbox, operand, shape, broadcast_dimensions)
+  in_part = lax.dynamic_slice(operand, in_start, in_count.shape)
+  out_part = lax.broadcast_in_dim(
+      in_part, shape=out_shape, broadcast_dimensions=broadcast_dimensions)
+  return lax.dynamic_update_slice(cache, out_part, out_start)
+
+# def_standard_op(lax.broadcast_in_dim_p, broadcast_in_dim_backward_rule)
+backward_rules[lax.broadcast_in_dim_p] = broadcast_in_dim_backward_rule
+update_rules[lax.broadcast_in_dim_p] = broadcast_in_dim_update_rule
 
 def dot_general_backward_rule(outbox, lhs, rhs, dimension_numbers, precision):
   out_start, out_shape = outbox
