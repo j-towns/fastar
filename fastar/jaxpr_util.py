@@ -40,10 +40,7 @@ class InfType:
       return _neginf if self.neg else inf
 
   def __neg__(self):
-    if self.neg:
-      return inf
-    else:
-      return _neginf
+    return inf if self.neg else _negif
 
   def __mul__(self, other):
     if not isinstance(other, InfType) and other == 0:
@@ -51,11 +48,57 @@ class InfType:
     other_neg = other.neg if isinstance(other, InfType) else other < 0
     return inf if other_neg == self.neg else _neginf
 
-  def __str__(self):
-    if self.neg:
-      return '-inf'
+  def __rmul__(self, other):
+    return self * other  # multiplication commutes
+
+  def __radd__(self, other):
+    return self + other  # addition commutes
+
+  def __rsub__(self, other):
+    if isinstance(other, InfType) and self.neg == other.neg:
+      raise InfShapeError
     else:
-      return 'inf'
+      return inf if self.neg else _neginf
+
+  def __floordiv__(self, divisor):
+    if isinstance(divisor, InfType) or divisor == 0:
+      raise InfShapeError
+    else:
+      divisor_neg = divisor.neg if isinstance(divisor, InfType) else divisor < 0
+      return inf if self.neg == divisor_neg else _neginf
+
+  def __eq__(self, other):
+    if isinstance(other, InfType) and self.neg == other.neg:
+      raise InfShapeError
+    else:
+      return False
+
+  def __ne__(self, other):
+    if isinstance(other, InfType) and self.neg == other.neg:
+      raise InfShapeError
+    else:
+      return True
+
+  def __ge__(self, other):
+    if isinstance(other, InfType) and self.neg == other.neg:
+      raise InfShapeError
+    else:
+      return False if self.neg else True
+
+  def __le__(self, other):
+    if isinstance(other, InfType) and self.neg == other.neg:
+      raise InfShapeError
+    else:
+      return True if self.neg else False
+
+  def __gt__(self, other):
+    return self.__ge__(self, other)
+
+  def __lt__(self, other):
+    return self.__le__(self, other)
+
+  def __str__(self):
+    return '-inf' if self.neg else 'inf'
 
   def __repr__(self):
     return __str__(self)
