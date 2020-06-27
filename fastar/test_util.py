@@ -56,7 +56,8 @@ def check_lazy_fun(fun, *args, atol=None, rtol=None):
   out_flat, out_tree = tree_flatten(lazy_eval(fun, *args))
   assert out_expected_tree == out_tree
   tree_multimap(check_shape_and_dtype, out_expected_flat, out_flat)
-  jtu.check_close(out_expected_flat, [o[:] for o in out_flat], atol, rtol)
+  jtu.check_close(out_expected_flat,
+                  [o[:] if o.shape else o[()] for o in out_flat], atol, rtol)
   check_child_counts(out_flat)
   check_state(out_flat)
   out_flat, _ = tree_flatten(lazy_eval(fun, *args))

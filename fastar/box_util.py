@@ -73,5 +73,6 @@ def static_box_finder(known, value):
   ret = []
   for box in box_finder(tmp, 1):
     ret.append(box)
-    tmp[box_to_slice(box)] = 0
+    if tmp.shape:
+      tmp[box_to_slice(box)] = 0
   return list(ret)
