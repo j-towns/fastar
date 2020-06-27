@@ -170,7 +170,8 @@ def concatenate_backward_rule(outbox, *invals, **params):
 backward_rules[lax.concatenate_p] = concatenate_backward_rule
 update_rules[lax.concatenate_p] = default_update_rule(
   concatenate_backward_rule,
-  lambda *args, dimension: lax.concatenate([a for a in args if a is not None], dimension))
+  lambda *args, dimension: lax.concatenate(
+      [a for a in args if a is not None], dimension))
 
 def slice_backward_rule(outbox, operand, start_indices, limit_indices, strides):
   if strides is not None:
@@ -180,14 +181,14 @@ def slice_backward_rule(outbox, operand, start_indices, limit_indices, strides):
   return [in_start], [np.ones(out_shape, int)]
 
 backward_rules[lax.slice_p] = slice_backward_rule
-update_rules[lax.slice_p] = default_update_rule(slice_backward_rule, lambda x, **_: x)
+update_rules[lax.slice_p] = default_update_rule(slice_backward_rule,
+                                                lambda x, **_: x)
 
 def transpose_backward_rule(outbox, operand, permutation):
   out_start, out_shape = outbox
   inverse_perm = np.argsort(permutation)
-  in_start = [out_start[i] for i in inverse_perm]
-  in_shape = [out_shape[i] for i in inverse_perm]
-  return [in_start], [np.ones(in_shape, int)]
+  return ([np.take(out_start, inverse_perm)],
+          [np.ones(np.take(out_shape, inverse_perm), int)])
 
 def_standard_op(lax.transpose_p, transpose_backward_rule)
 
