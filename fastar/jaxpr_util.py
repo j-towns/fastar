@@ -61,7 +61,7 @@ class InfType:
       return inf if self.neg else _neginf
 
   def __floordiv__(self, divisor):
-    if isinstance(divisor, InfType) or divisor == 0:
+    if isinstance(divisor, InfType):
       raise InfShapeError
     else:
       divisor_neg = divisor.neg if isinstance(divisor, InfType) else divisor < 0
@@ -69,39 +69,33 @@ class InfType:
 
   def __eq__(self, other):
     if isinstance(other, InfType) and self.neg == other.neg:
-      raise InfShapeError
+      return True
     else:
       return False
 
   def __ne__(self, other):
     if isinstance(other, InfType) and self.neg == other.neg:
-      raise InfShapeError
+      return False
     else:
       return True
 
   def __ge__(self, other):
-    if isinstance(other, InfType) and self.neg == other.neg:
-      raise InfShapeError
-    else:
-      return False if self.neg else True
+    return not self.neg
 
   def __le__(self, other):
-    if isinstance(other, InfType) and self.neg == other.neg:
-      raise InfShapeError
-    else:
-      return True if self.neg else False
+    return self.neg
 
   def __gt__(self, other):
-    return self.__ge__(self, other)
+    return not (self.neg or (isinstance(other, InfType) and not other.neg))
 
   def __lt__(self, other):
-    return self.__le__(self, other)
+    return self.neg and not (isinstance(other, InfType) and other.neg)
 
   def __str__(self):
     return '-inf' if self.neg else 'inf'
 
   def __repr__(self):
-    return __str__(self)
+    return self.__str__()
 
 
 abstract_arrays._DIMENSION_TYPES.add(InfType)
