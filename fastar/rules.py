@@ -2,7 +2,7 @@ from functools import partial
 
 import numpy as np
 from jax import lax
-from jax.util import safe_map, safe_zip
+from jax.util import safe_map, safe_zip, curry, unzip2, prod
 import jax.numpy as jnp
 
 from fastar.core import backward_rules, update_rules, get_aval
@@ -11,6 +11,20 @@ from fastar.box_util import box_to_slice
 
 map = safe_map
 zip = safe_zip
+
+@curry
+def default_update_rule(backward_rule, fun, cache, outbox, *args, **kwargs):
+  out_start, out_shape = outbox
+  instarts, incounts = backward_rule(outbox, *args, **kwargs)
+  inslices = [None if instart is None else
+              lax.dynamic_slice(arg, instart, incount.shape)
+              for arg, instart, incount in zip(args, instarts, incounts)]
+  out_slice = fun(*inslices, **kwargs)
+  return lax.dynamic_update_slice(cache, out_slice, out_start)
+
+def def_standard_op(op, backward_rule):
+  backward_rules[op] = backward_rule
+  update_rules[op] = default_update_rule(backward_rule, op.bind)
 
 def naryop_backward_rule(outbox, *invals, **params):
   out_starts, out_shape = outbox
@@ -27,13 +41,6 @@ def naryop_backward_rule(outbox, *invals, **params):
       if np.shape(val) else np.prod(out_shape) for val in invals]
   in_counts = map(partial(np.full, dtype=int), in_shapes, in_counts)
   return in_starts, in_counts
-
-def naryop_update_rule(op, cache, outbox, *invals, **params):
-  instarts, incounts = naryop_backward_rule(outbox, *map(get_aval, invals))
-  inboxes = [(start, count.shape) for start, count in zip(instarts, incounts)]
-  invals = [val if jnp.isscalar(val) else val[box_to_slice(box)]
-            for val, box in zip(invals, inboxes)]
-  return lax.dynamic_update_slice(cache, op.bind(*invals, **params), outbox[0])
 
 naryops = [
     lax.lt_p,
@@ -101,8 +108,39 @@ naryops = [
 ]
 
 for op in naryops:
-  backward_rules[op] = naryop_backward_rule
-  update_rules[op] = partial(naryop_update_rule, op)
+  def_standard_op(op, naryop_backward_rule)
+
+def reduce_backward_rule(outbox, operand, axes):
+  out_start, out_shape = outbox
+  in_start = list(out_start)
+  in_shape = list(out_shape)
+  for d in np.sort(axes):
+    in_start.insert(d, 0)
+    in_shape.insert(d, operand.shape[d])
+  return [in_start], [np.ones(in_shape, int)]
+
+reduce_ops = [
+  lax.reduce_sum_p,
+  lax.reduce_prod_p,
+  lax.reduce_max_p,
+  lax.reduce_min_p,
+  lax.reduce_or_p,
+  lax.reduce_and_p,
+]
+
+for op in reduce_ops:
+  def_standard_op(op, reduce_backward_rule)
+
+def squeeze_backward_rule(outbox, operand, dimensions):
+  out_start, out_shape = outbox
+  in_start = list(out_start)
+  in_shape = list(out_shape)
+  for d in np.sort(dimensions):
+    in_start.insert(d, 0)
+    in_shape.insert(d, 1)
+  return [in_start], [np.ones(in_shape, int)]
+
+def_standard_op(lax.squeeze_p, squeeze_backward_rule)
 
 def concatenate_backward_rule(outbox, *invals, **params):
   # from IPython.terminal.debugger import set_trace; set_trace()
@@ -129,19 +167,10 @@ def concatenate_backward_rule(outbox, *invals, **params):
     position = position + v_shape[dim]
   return instarts, incounts
 
-def concatenate_update_rule(cache, outbox, *invals, **params):
-  dim = params['dimension']
-  instarts, incounts = concatenate_backward_rule(outbox, *invals, **params)
-  inboxes = [None if start is None else (start, count.shape)
-             for start, count in zip(instarts, incounts)]
-  invals = [val[box_to_slice(box)] for val, box in zip(invals, inboxes)
-            if box is not None]
-  out_start, _ = outbox
-  return lax.dynamic_update_slice(
-      cache, lax.concatenate(invals, dim), out_start)
-
 backward_rules[lax.concatenate_p] = concatenate_backward_rule
-update_rules[lax.concatenate_p] = concatenate_update_rule
+update_rules[lax.concatenate_p] = default_update_rule(
+  concatenate_backward_rule,
+  lambda *args, dimension: lax.concatenate([a for a in args if a is not None], dimension))
 
 def slice_backward_rule(outbox, operand, start_indices, limit_indices, strides):
   if strides is not None:
@@ -150,18 +179,61 @@ def slice_backward_rule(outbox, operand, start_indices, limit_indices, strides):
   in_start = np.add(out_start, start_indices)
   return [in_start], [np.ones(out_shape, int)]
 
-def slice_update_rule(cache, outbox, operand, start_indices, limit_indices,
-                      strides):
-  if strides is not None:
-    raise NotImplementedError('Strided slice is not yet implemented')
-  out_start, out_shape = outbox
-  in_start = np.add(out_start, start_indices)
-  return lax.dynamic_update_slice(
-      cache, lax.dynamic_slice(operand, in_start, out_shape), out_start)
-
 backward_rules[lax.slice_p] = slice_backward_rule
-update_rules[lax.slice_p] = slice_update_rule
+update_rules[lax.slice_p] = default_update_rule(slice_backward_rule, lambda x, **_: x)
+
+def transpose_backward_rule(outbox, operand, permutation):
+  out_start, out_shape = outbox
+  inverse_perm = np.argsort(permutation)
+  in_start = [out_start[i] for i in inverse_perm]
+  in_shape = [out_shape[i] for i in inverse_perm]
+  return [in_start], [np.ones(in_shape, int)]
+
+def_standard_op(lax.transpose_p, transpose_backward_rule)
+
+def rev_backward_rule(outbox, operand, dimensions):
+  out_start, out_shape = outbox
+  in_start = [op_size - (start + size) if d in dimensions else start
+              for d, (op_size, size, start)
+              in enumerate(zip(operand.shape, out_shape, out_start))]
+  return [in_start], [np.ones(out_shape, int)]
+
+def_standard_op(lax.rev_p, rev_backward_rule)
 
 def broadcast_in_dim_backward_rule(
     outbox, operand, shape, broadcast_dimensions):
-  pass
+  out_start, out_shape = outbox
+  in_start = []
+  in_shape = []
+  factor = 1
+  for d in range(len(out_start)):
+    if d in broadcast_dimensions:
+      in_start.append(out_start[d])
+      (in_dim,), = np.argwhere(np.equal(broadcast_dimensions, d))
+      in_size = operand.shape[in_dim]
+      is_broadcast = shape[d] != in_size
+      if is_broadcast:
+        assert in_size == 1
+        factor *= out_shape[d]
+      in_shape.append(1 if is_broadcast else out_shape[d])
+    else:
+      factor *= out_shape[d]
+  return [in_start], [np.ones(in_shape, int) * factor]
+
+def_standard_op(lax.broadcast_in_dim_p, broadcast_in_dim_backward_rule)
+
+def dot_general_backward_rule(outbox, lhs, rhs, dimension_numbers, precision):
+  out_start, out_shape = outbox
+  outslices = list(zip(*outbox))
+  (lhs_contracting, rhs_contracting), (lhs_batch, rhs_batch) = dimension_numbers
+  lhs_other_out_dims = list(range(len(lhs_batch), len(lhs.shape) - len(lhs_contracting)))
+  rhs_other_out_dims = list(range(len(rhs_batch) + len(lhs_other_out_dims), len(out_shape)))
+  lhs_outbox = unzip2([outslices[d] for d in list(lhs_batch) + lhs_other_out_dims])
+  (lhs_start,), (lhs_incount,) = reduce_backward_rule(lhs_outbox, lhs, axes=lhs_contracting)
+  lhs_incount *= prod([out_shape[d] for d in rhs_other_out_dims])
+  rhs_outbox = unzip2([outslices[d] for d in list(rhs_batch) + rhs_other_out_dims])
+  (rhs_start,), (rhs_incount,) = reduce_backward_rule(rhs_outbox, rhs, axes=rhs_contracting)
+  rhs_incount *= prod([out_shape[d] for d in lhs_other_out_dims])
+  return [lhs_start, rhs_start], [lhs_incount, rhs_incount]
+
+def_standard_op(lax.dot_general_p, dot_general_backward_rule)

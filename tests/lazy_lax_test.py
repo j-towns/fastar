@@ -26,7 +26,8 @@ int_dtypes = supported_dtypes([np.int32, np.int64])
 uint_dtypes = supported_dtypes([np.uint32, np.uint64])
 bool_dtypes = [np.bool_]
 default_dtypes = float_dtypes + int_dtypes
-all_dtypes = float_dtypes + complex_dtypes + int_dtypes + bool_dtypes
+number_dtypes = default_dtypes + complex_dtypes
+all_dtypes = number_dtypes + bool_dtypes
 
 compatible_shapes = [[(3,)], [(3, 4), (3, 1), (1, 4)], [(2, 3, 4), (2, 1, 4)]]
 
@@ -44,9 +45,8 @@ LAX_OPS = [
     op_record("floor", 1, float_dtypes, jtu.rand_small),
     op_record("ceil", 1, float_dtypes, jtu.rand_small),
     op_record("round", 1, float_dtypes, jtu.rand_default),
-    # TODO (j-towns): requires lax.broadcast_in_dim
-    # op_record("nextafter", 2, [f for f in float_dtypes if f != dtypes.bfloat16],
-    #           jtu.rand_default, tol=0),
+    op_record("nextafter", 2, [f for f in float_dtypes if f != dtypes.bfloat16],
+              jtu.rand_default, tol=0),
 
     op_record("is_finite", 1, float_dtypes, jtu.rand_small),
 
@@ -107,8 +107,7 @@ LAX_OPS = [
 
     op_record("real", 1, complex_dtypes, jtu.rand_default),
     op_record("imag", 1, complex_dtypes, jtu.rand_default),
-    # TODO (j-towns) requires lax.broadcast_in_dim
-    # op_record("complex", 2, complex_elem_dtypes, jtu.rand_default),
+    op_record("complex", 2, complex_elem_dtypes, jtu.rand_default),
     op_record("conj", 1, complex_elem_dtypes + complex_dtypes,
               jtu.rand_default),
     op_record("abs", 1, default_dtypes + complex_dtypes, jtu.rand_default),
@@ -151,6 +150,45 @@ def test_lazy(op_name, rng_factory, shapes, dtype, tol):
   args = [rng(shape, dtype) for shape in shapes]
   tu.check_lazy_fun(getattr(lax, op_name), *args, atol=tol, rtol=tol)
 
+LAX_REDUCE_OPS = [
+  op_record("_reduce_sum", 1, number_dtypes, jtu.rand_default),
+  op_record("_reduce_prod", 1, number_dtypes, jtu.rand_small_positive),
+  op_record("_reduce_max", 1, all_dtypes, jtu.rand_default),
+  op_record("_reduce_min", 1, all_dtypes, jtu.rand_default),
+  op_record("_reduce_or", 1, bool_dtypes, jtu.rand_default),
+  op_record("_reduce_and", 1, bool_dtypes, jtu.rand_default),
+]
+
+@pytest.mark.parametrize(
+  'op_name,rng_factory,shape,axes,dtype,tol',
+  [(rec.op, rec.rng_factory, shape, axes, dtype, rec.tol)
+   for rec in LAX_REDUCE_OPS
+   for (shape, axes) in [[(3, 4, 5), (0,)], [(3, 4, 5), (1, 2)],
+                         [(3, 4, 5), (0, 2)], [(3, 4, 5), (0, 1, 2)]]
+   for dtype in rec.dtypes])
+def test_reduce(op_name, rng_factory, shape, axes, dtype, tol):
+  rng = rng_factory(np.random)
+  args = [rng(shape, dtype)]
+  fun = partial(getattr(lax.lax, op_name), axes=axes)
+  tu.check_lazy_fun(fun, *args, atol=tol, rtol=tol)
+
+@pytest.mark.parametrize(
+  'shape,dtype,dimensions,rng_factory',
+  [(shape, dtype, dimensions, rng_factory)
+   for dtype in default_dtypes
+   for (shape, dimensions) in [
+     [(1,), (0,)],
+     [(1,), (-1,)],
+     [(2, 1, 4), (1,)],
+     [(2, 1, 3, 1), (1,)],
+     [(2, 1, 3, 1), (1, 3)],
+     [(2, 1, 3, 1), (3,)]]
+   for rng_factory in [jtu.rand_default]])
+def test_squeeze(shape, dtype, dimensions, rng_factory):
+  rng = rng_factory(np.random)
+  args = [rng(shape, dtype)]
+  tu.check_lazy_fun(lambda x: lax.squeeze(x, dimensions), *args)
+
 @pytest.mark.parametrize(
     'dim,base_shape,dtype,num_arrs,rng_factory',
     [(dim, base_shape, dtype, num_arrs, rng_factory)
@@ -166,6 +204,75 @@ def test_concatenate(dim, base_shape, dtype, num_arrs, rng_factory):
   args = [rng(shape, dtype) for shape in shapes]
   op = lambda *args: lax.concatenate(args, dim)
   tu.check_lazy_fun(op, *args)
+
+@pytest.mark.parametrize(
+  'shape,dtype,permutation,rng_factory',
+  [(shape, dtype, permutation, rng_factory)
+   for dtype in default_dtypes
+   for shape, permutation in [((3, 4), (1, 0)),
+                              ((3, 4, 5), (2, 1, 0)),
+                              ((3, 4, 5), (1, 0, 2))]
+   for rng_factory in [jtu.rand_default]])
+def test_transpose(shape, dtype, permutation, rng_factory):
+  rng = rng_factory(np.random)
+  arg = rng(shape, dtype)
+  tu.check_lazy_fun(lambda x: lax.transpose(x, permutation=permutation), arg)
+
+@pytest.mark.parametrize(
+    'shape,dtype,dimensions,rng_factory',
+    [(shape, dtype, dimensions, rng_factory)
+     for dtype in default_dtypes
+     for shape, dimensions in [((4,), (0,)), ((3, 4), (1,)), ((2, 3, 4), (1, 2))]
+     for rng_factory in [jtu.rand_default]])
+def test_rev(shape, dtype, dimensions, rng_factory):
+  rng = rng_factory(np.random)
+  arg = rng(shape, dtype)
+  tu.check_lazy_fun(lambda x: lax.rev(x, dimensions=dimensions), arg)
+
+@pytest.mark.parametrize(
+  'lhs_shape,rhs_shape,dtype,rng_factory',
+  [(lhs_shape, rhs_shape, dtype, rng_factory)
+   for lhs_shape in [(3,), (4, 3)]
+   for rhs_shape in [(3,), (3, 6)]
+   for dtype in float_dtypes
+   for rng_factory in [jtu.rand_default]])
+def test_dot(lhs_shape, rhs_shape, dtype, rng_factory):
+  rng = rng_factory(np.random)
+  args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
+  tu.check_lazy_fun(lax.dot, *args)
+
+@pytest.mark.parametrize(
+  'lhs_shape,rhs_shape,dimension_numbers,dtype,rng_factory',
+  [(lhs_shape, rhs_shape, dimension_numbers, dtype, rng_factory)
+   for dtype in float_dtypes
+   for lhs_shape, rhs_shape, dimension_numbers in
+   [((3, 3, 2), (3, 2, 4), (([2], [1]), ([0], [0]))),
+    ((3, 4, 2, 4), (3, 4, 3, 2), (([2], [3]), ([0, 1], [0, 1])))]
+   for rng_factory in [jtu.rand_default]])
+def test_dot_general_contract_and_batch(lhs_shape, rhs_shape, dimension_numbers, dtype, rng_factory):
+  rng = rng_factory(np.random)
+  args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
+  tu.check_lazy_fun(partial(lax.dot_general, dimension_numbers=dimension_numbers), *args, atol=1e-5)
+
+@pytest.mark.parametrize(
+  'lhs_shape,rhs_shape,dtype,lhs_contracting,rhs_contracting,rng_factory',
+  [(lhs_shape, rhs_shape, dtype, lhs_contracting, rhs_contracting, rng_factory)
+   for dtype in float_dtypes
+   for lhs_shape, rhs_shape, lhs_contracting, rhs_contracting in [
+     [(3, 5), (2, 5), [1], [1]],
+     [(5, 3), (5, 2), [0], [0]],
+     [(5, 3, 2), (5, 2, 4), [0], [0]],
+     [(5, 3, 2), (5, 2, 4), [0,2], [0,1]],
+     [(1, 2, 2, 3), (1, 2, 3, 1), [1], [1]],
+     [(3, 2), (2, 4), [1], [0]],
+   ]
+   for rng_factory in [jtu.rand_default]])
+def test_dot_general_contract_only(
+    lhs_shape, rhs_shape, dtype, lhs_contracting, rhs_contracting, rng_factory):
+  rng = rng_factory(np.random)
+  args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
+  dimension_numbers = ((lhs_contracting, rhs_contracting), ((), ()))
+  tu.check_lazy_fun(partial(lax.dot_general, dimension_numbers=dimension_numbers), *args, atol=1e-5)
 
 @pytest.mark.parametrize(
     'shape,dtype,starts,limits,strides,rng_factory',
@@ -188,4 +295,21 @@ def test_slice(shape, dtype, starts, limits, strides, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(shape, dtype)]
   op = lambda x: lax.slice(x, starts, limits, strides)
+  tu.check_lazy_fun(op, *args)
+
+@pytest.mark.parametrize(
+  "inshape,dtype,outshape,dimensions,rng_factory",
+  [(inshape, dtype, outshape, broadcast_dimensions, rng_factory)
+   for inshape, outshape, broadcast_dimensions in [
+    ([2], [2, 2], [0]),
+    ([2], [2, 2], [1]),
+    ([2], [2, 3], [0]),
+    ([], [2, 3], []),
+    ([1], [2, 3], [1])]
+  for dtype in default_dtypes
+  for rng_factory in [jtu.rand_default]])
+def test_broadcast_in_dim(inshape, dtype, outshape, dimensions, rng_factory):
+  rng = rng_factory(np.random)
+  args = [rng(inshape, dtype)]
+  op = lambda x: lax.broadcast_in_dim(x, outshape, dimensions)
   tu.check_lazy_fun(op, *args)
