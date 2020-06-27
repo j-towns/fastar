@@ -313,3 +313,23 @@ def test_broadcast_in_dim(inshape, dtype, outshape, dimensions, rng_factory):
   args = [rng(inshape, dtype)]
   op = lambda x: lax.broadcast_in_dim(x, outshape, dimensions)
   tu.check_lazy_fun(op, *args)
+
+@pytest.mark.parametrize(
+  'shape,dtype,padding_config,rng_factory',
+  [(shape, dtype, padding_config, jtu.rand_small)
+   for shape in [(2, 3)]
+   for padding_config in
+   [
+     [(0, 0, 0), (0, 0, 0)],  # no padding
+     [(1, 1, 0), (2, 2, 0)],  # only positive edge padding
+     [(1, 2, 1), (0, 1, 0)],  # edge padding and interior padding
+     [(0, 0, 0), (-1, -1, 0)],  # negative padding
+     # TODO: [(0, 0, 0), (-2, -2, 4)],  # negative padding and interior padding
+     [(0, 0, 0), (-2, -3, 1)],  # remove everything in one dimension
+   ]
+   for dtype in default_dtypes])
+def test_pad(shape, dtype, padding_config, rng_factory):
+  rng = rng_factory(np.random)
+  args = [rng(shape, dtype)]
+  op = lambda operand: lax.pad(operand, np.array(-1, dtype), padding_config)
+  tu.check_lazy_fun(op, *args)
