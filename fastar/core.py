@@ -8,7 +8,7 @@ from jax.ops import index_update
 from fastar.box_util import (
     box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
     addbox)
-from fastar.jaxpr_util import Literal_
+from fastar.jaxpr_util import Literal_, inf
 import numpy as np
 
 
@@ -19,16 +19,22 @@ UNKNOWN = 0
 REQUESTED = -1
 KNOWN = 1
 
+CACHE_SIZE = 128
+
 backward_rules = {}
 update_rules = {}
 
 class LazyArray(object):
-  __slots__ = ['cache', 'state', 'eqn', 'var_idx', 'child_counts']
+  __slots__ = ['aval', 'start_indices', 'cache', 'state', 'eqn', 'var_idx',
+               'child_counts']
 
   def __init__(self, var):
-    self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
-    self.state = np.zeros(var.aval.shape, int)
-    self.child_counts = np.zeros(var.aval.shape, int)
+    self.aval = var.aval
+    cache_shape = tuple(CACHE_SIZE if d is inf else d for d in var.aval.shape)
+    self.cache = jnp.zeros(cache_shape, var.aval.dtype)
+    self.state = np.zeros(cache_shape, int)
+    self.child_counts = np.zeros(cache_shape, int)
+    self.start_indices = np.zeros(self.ndim, int)
     self.eqn = None
     self.var_idx = None
 
@@ -39,23 +45,19 @@ class LazyArray(object):
 
   @property
   def shape(self):
-    return self.cache.shape
+    return self.aval.shape
 
   @property
   def size(self):
-    return self.cache.size
+    return self.aval.size
 
   @property
   def dtype(self):
-    return self.cache.dtype
+    return self.aval.dtype
 
   @property
   def ndim(self):
-    return self.cache.ndim
-
-  @property
-  def _aval(self):
-    return self.cache.aval
+    return self.aval.ndim
 
   def _compute_ancestral_child_counts(self, box):
     invals, outvals, primitive, params, _ = self.eqn
@@ -157,6 +159,6 @@ def lazy_eval_jaxpr(jaxpr, consts, *args):
 
 def get_aval(x):
   if isinstance(x, LazyArray):
-    return x._aval
+    return x.aval
   else:
     return jc.get_aval(x)

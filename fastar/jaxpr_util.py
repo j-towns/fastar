@@ -68,14 +68,14 @@ class InfType:
       return inf if self.neg == divisor_neg else _neginf
 
   def __eq__(self, other):
-    if isinstance(other, InfType) and self.neg == other.neg:
-      return True
+    if isinstance(other, InfType):
+      return self.neg == other.neg
     else:
       return False
 
   def __ne__(self, other):
-    if isinstance(other, InfType) and self.neg == other.neg:
-      return False
+    if isinstance(other, InfType):
+      return self.neg != other.neg
     else:
       return True
 
