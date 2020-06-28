@@ -254,10 +254,10 @@ def pad_backward_rule(outbox, operand, padding_value, padding_config):
   lo, _, interior = unzip3(padding_config)
   dilation = np.array(interior) + 1
   assert type(out_start) == np.ndarray
-  bounded = lambda indices: np.minimum(np.maximum(indices, 0), operand.shape)
+  inclip = lambda indices: np.clip(indices, 0, operand.shape)
   lo_sign = np.where(np.less(lo, 0), -1, 1)
-  instart = bounded(lo_sign * np.floor_divide(lo_sign * (out_start - lo), dilation))
-  instop = bounded(lax.lax._ceil_divide(out_start + out_shape - lo, dilation))
+  instart = inclip(lo_sign * np.floor_divide(lo_sign * (out_start - lo), dilation))
+  instop = inclip(lax.lax._ceil_divide(out_start + out_shape - lo, dilation))
   inshape = instop - instart
   padcount = prod(out_shape) - prod(inshape)
   return [instart, ()], [np.ones(inshape), padcount]
@@ -266,15 +266,15 @@ def pad_update_rule(cache, outbox, operand, padding_value, padding_config):
   out_start, out_shape = outbox
   (instart, _), (incount, _) = pad_backward_rule(outbox, operand, padding_value, padding_config)
   inslice = lax.dynamic_slice(operand, instart, incount.shape)
-  lo, hi, interior = unzip3(padding_config)
+  lo, _, interior = unzip3(padding_config)
   dilation = np.array(interior) + 1
-  bounded = lambda indices: np.minimum(np.maximum(indices, 0), operand.shape)
-  next_instart = bounded(lax.lax._ceil_divide(out_start - lo, dilation))
+  inclip = lambda indices: np.clip(indices, 0, operand.shape)
+  next_instart = inclip(lax.lax._ceil_divide(out_start - lo, dilation))
   next_outstart = next_instart * dilation + lo
-  s_start = next_outstart - out_start
-  s_stop = s_start + jnp.array(incount.shape) * dilation
+  _start = next_outstart - out_start
+  _stop = _start + jnp.array(incount.shape) * dilation
   out_index = [slice(start, stop, step)
-               for start, stop, step in zip(s_start, s_stop, dilation)]
+               for start, stop, step in zip(_start, _stop, dilation)]
   out_slice = jnp.full(out_shape, padding_value)
   out_slice = ops.index_update(out_slice, out_index, inslice)
   return lax.dynamic_update_slice(cache, out_slice, out_start)
