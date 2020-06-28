@@ -255,7 +255,8 @@ def pad_backward_rule(outbox, operand, padding_value, padding_config):
   dilation = np.array(interior) + 1
   assert type(out_start) == np.ndarray
   bounded = lambda indices: np.minimum(np.maximum(indices, 0), operand.shape)
-  instart = bounded(np.floor_divide(out_start - lo, dilation))
+  lo_sign = np.where(np.less(lo, 0), -1, 1)
+  instart = bounded(lo_sign * np.floor_divide(lo_sign * (out_start - lo), dilation))
   instop = bounded(lax.lax._ceil_divide(out_start + out_shape - lo, dilation))
   inshape = instop - instart
   padcount = prod(out_shape) - prod(inshape)

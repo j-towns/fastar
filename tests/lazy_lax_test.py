@@ -324,7 +324,7 @@ def test_broadcast_in_dim(inshape, dtype, outshape, dimensions, rng_factory):
      [(1, 1, 0), (2, 2, 0)],  # only positive edge padding
      [(1, 2, 1), (0, 1, 0)],  # edge padding and interior padding
      [(0, 0, 0), (-1, -1, 0)],  # negative padding
-     # TODO: [(0, 0, 0), (-2, -2, 4)],  # negative padding and interior padding
+     [(0, 0, 0), (-2, -2, 4)],  # negative padding and interior padding
      [(0, 0, 0), (-2, -3, 1)],  # remove everything in one dimension
    ]
    for dtype in default_dtypes])
