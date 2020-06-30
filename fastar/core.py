@@ -7,8 +7,8 @@ from jax import lax
 from jax.ops import index_update
 from fastar.box_util import (
     box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
-    addbox)
-from fastar.jaxpr_util import Literal_
+    addbox, circular_add, circular_get)
+from fastar.jaxpr_util import Literal_, inf
 import numpy as np
 
 
@@ -19,16 +19,84 @@ UNKNOWN = 0
 REQUESTED = -1
 KNOWN = 1
 
+CACHE_SIZE = 128
+
 backward_rules = {}
 update_rules = {}
 
+
+class LazyError(Exception): pass
+
+# Circular arrays
+class ChildCounts:
+  __slots__ = ['buffer', 'total', 'start']
+  def __init__(self, shape):
+    self.buffer = np.zeros(shape, int)
+    self.total = 0
+    self.start = np.zeros(len(shape), int)
+
+  def get(self, box):
+    box_start, box_shape = box
+    box_stop = np.add(box_start, box_shape)
+    if self.buffer.shape:
+      if (np.all(box_start < np.add(self.start, self.buffer.shape))
+          and np.all(box_stop > self.start)):
+        pad_lo = np.maximum(np.subtract(self.start, box_start), 0)
+        pad_hi = np.maximum(np.add(box_start, box_shape)
+                            - np.add(self.start, self.buffer.shape), 0)
+        box_stop = np.minimum(np.add(box_start, box_shape),
+                              np.add(self.start, self.buffer.shape))
+        box_start = np.maximum(self.start, box_start)
+        box = box_start, box_stop - box_start
+        return np.pad(circular_get(self.buffer, self.start, box),
+                      zip(pad_lo, pad_hi))
+      else:
+        return np.zeros(box_shape, int)
+    else:
+      assert len(box_start) == len(box_shape) == 0
+      return self.buffer
+
+  def add(self, box, val):
+    box_start, box_shape = box
+    assert val.shape == tuple(box_shape)
+    if self.buffer.shape:
+      if self.total == 0:
+        self.start = box_start
+      else:
+        self.start = np.minimum(self.start, box_start)
+      if np.any(np.add(box_start, box_shape)
+                > np.add(self.start, self.buffer.shape)):
+        raise LazyError("cache is too small for requested computation.")
+      circular_add(self.buffer, self.start, box, val)
+    else:
+      assert len(box_start) == len(box_shape) == 0
+      self.buffer += val
+    self.total += np.sum(val)
+
+  def subtract(self, box, val):
+    box_start, box_shape = box
+    assert val.shape == tuple(box_shape)
+    if self.buffer.shape:
+      assert np.all(np.add(box_start, box_shape)
+                    <= np.add(self.start, self.buffer.shape))
+      assert np.all(np.less_equal(self.start, box_start))
+      circular_add(self.buffer, self.start, box, -val)
+    else:
+      assert len(box_start) == len(box_shape) == 0
+      self.buffer -= val
+    self.total -= np.sum(val)
+    assert self.total >= 0
+
+
 class LazyArray(object):
-  __slots__ = ['cache', 'state', 'eqn', 'var_idx', 'child_counts']
+  __slots__ = ['cache', 'state', 'eqn', 'var_idx', 'child_counts', '_aval']
 
   def __init__(self, var):
+    self._aval = var.aval
+    cache_shape = [CACHE_SIZE if d is inf else d for d in self._aval.shape]
     self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
     self.state = np.zeros(var.aval.shape, int)
-    self.child_counts = np.zeros(var.aval.shape, int)
+    self.child_counts = ChildCounts(cache_shape)
     self.eqn = None
     self.var_idx = None
 
@@ -39,23 +107,19 @@ class LazyArray(object):
 
   @property
   def shape(self):
-    return self.cache.shape
+    return self._aval.shape
 
   @property
   def size(self):
-    return self.cache.size
+    return self._aval.size
 
   @property
   def dtype(self):
-    return self.cache.dtype
+    return self._aval.dtype
 
   @property
   def ndim(self):
-    return self.cache.ndim
-
-  @property
-  def _aval(self):
-    return self.cache.aval
+    return self._aval.ndim
 
   def _compute_ancestral_child_counts(self, box):
     invals, outvals, primitive, params, _ = self.eqn
@@ -72,16 +136,15 @@ class LazyArray(object):
         for ival, istart, count in zip(invals, instarts, counts):
           if isinstance(ival, LazyArray) and istart is not None:
             ibox = istart, count.shape
-            addbox(ival.child_counts, ibox,
-                   count * (getbox(ival.state, ibox) != KNOWN))
+            ival.child_counts.add(ibox,
+                                  count * (getbox(ival.state, ibox) != KNOWN))
             ival._compute_ancestral_child_counts(ibox)
 
   def _toposort(self, box):
     self._compute_ancestral_child_counts(box)
     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
     sorted_boxes = []
-    local_child_counts = (getbox(self.child_counts, box) if self.shape
-                          else self.child_counts)
+    local_child_counts = self.child_counts.get(box)
     childless_boxes = [
         (self, to_global_coords(b)) for b in static_box_finder(
             (local_child_counts == 0) & (getbox(self.state, box) != KNOWN), 1)]
@@ -94,13 +157,13 @@ class LazyArray(object):
         if isinstance(ival, LazyArray) and istart is not None:
           ibox = istart, count.shape
           to_iglobal_coords = lambda b: (np.add(istart, b[0]), b[1])
-          ichild_counts = (getbox(ival.child_counts, ibox) if ival.shape
-                           else ival.child_counts)
-          ichild_counts -= (count * (getbox(ival.state, ibox) != KNOWN))
+          ival.child_counts.subtract(
+              ibox, count * (getbox(ival.state, ibox) != KNOWN))
+          ilocal_child_counts = ival.child_counts.get(ibox)
           childless_boxes.extend(
               [(ival, to_iglobal_coords(b))
                for b in static_box_finder(
-                   (ichild_counts == 0) &
+                   (ilocal_child_counts == 0) &
                    (getbox(ival.state, ibox) != KNOWN), 1)])
     return sorted_boxes[::-1]
 

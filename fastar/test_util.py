@@ -12,6 +12,7 @@ from jax.util import safe_map, safe_zip
 from jax.tree_util import tree_multimap, tree_flatten
 
 from fastar import lazy_eval, lazy_eval_fixed_point, LazyArray
+from fastar import core
 
 map = safe_map
 zip = safe_zip
@@ -32,9 +33,10 @@ def check_child_counts(arrs):
   def _check_child_counts(arrs):
     for arr in arrs:
       if isinstance(arr, LazyArray) and arr not in visited:
-        assert type(arr.child_counts) is np.ndarray
-        assert arr.child_counts.dtype == np.int64
-        assert np.all(arr.child_counts == 0)
+        assert type(arr.child_counts) is core.ChildCounts
+        assert arr.child_counts.buffer.dtype == np.int64
+        assert np.all(arr.child_counts.buffer == 0)
+        assert arr.child_counts.total == 0
         visited.add(arr)
         _check_child_counts(arr.eqn.invars)
   _check_child_counts(arrs)
