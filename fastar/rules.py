@@ -1,12 +1,10 @@
 from functools import partial
 
 import numpy as np
-from jax import lax
-from jax.util import safe_map, safe_zip, curry, unzip2, prod
-import jax.numpy as jnp
+from jax import lax, numpy as jnp, ops
+from jax.util import safe_map, safe_zip, curry, unzip2, prod, unzip3
 
-from fastar.core import backward_rules, update_rules, get_aval
-from fastar.box_util import box_to_slice
+from fastar.core import backward_rules, update_rules
 
 
 map = safe_map
@@ -250,3 +248,38 @@ def dot_general_backward_rule(outbox, lhs, rhs, dimension_numbers, precision):
   return [lhs_start, rhs_start], [lhs_incount, rhs_incount]
 
 def_standard_op(lax.dot_general_p, dot_general_backward_rule)
+
+def pad_backward_rule(outbox, operand, padding_value, padding_config):
+  out_start, out_shape = outbox
+  lo, _, interior = unzip3(padding_config)
+  dilation = np.array(interior) + 1
+  assert type(out_start) == np.ndarray
+  inclip = lambda indices: np.clip(indices, 0, operand.shape)
+  lo_sign = np.where(np.less(lo, 0), -1, 1)
+  instart = inclip(lo_sign * np.floor_divide(lo_sign * (out_start - lo), dilation))
+  instop = inclip(lax.lax._ceil_divide(out_start + out_shape - lo, dilation))
+  inshape = instop - instart
+  insize = prod(inshape)
+  padcount = prod(out_shape) - insize
+  return ([instart if insize else None, ()],
+          [np.ones(inshape) if insize else None, padcount])
+
+def pad_update_rule(cache, outbox, operand, padding_value, padding_config):
+  out_start, out_shape = outbox
+  (instart, _), (incount, _) = pad_backward_rule(outbox, operand, padding_value, padding_config)
+  if instart is None:
+    out_slice = jnp.full(out_shape, padding_value)
+  else:
+    inslice = lax.dynamic_slice(operand, instart, incount.shape)
+    lo, _, interior = unzip3(padding_config)
+    dilation = np.array(interior) + 1
+    inclip = lambda indices: np.clip(indices, 0, operand.shape)
+    next_instart = inclip(lax.lax._ceil_divide(out_start - lo, dilation))
+    next_outstart = next_instart * dilation + lo
+    _lo = next_outstart - out_start
+    _hi = np.array(out_shape) - (_lo + (jnp.array(incount.shape) - 1) * dilation + 1)
+    out_slice = lax.pad(inslice, padding_value, zip(_lo, _hi, interior))
+  return lax.dynamic_update_slice(cache, out_slice, out_start)
+
+backward_rules[lax.pad_p] = pad_backward_rule
+update_rules[lax.pad_p] = pad_update_rule
