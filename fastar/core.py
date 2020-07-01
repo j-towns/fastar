@@ -22,7 +22,6 @@ KNOWN = 1
 CACHE_SIZE = 128
 
 backward_rules = {}
-update_rules = {}
 
 
 class LazyError(Exception): pass
@@ -131,7 +130,7 @@ class LazyArray(object):
         # TODO: pass var_idx to the backward rule
         raise NotImplementedError
       else:
-        instarts, counts = backward_rules[primitive](
+        instarts, counts, _ = backward_rules[primitive](
             to_global_coords(ubox), *invals, **params)
         for ival, istart, count in zip(invals, instarts, counts):
           if isinstance(ival, LazyArray) and istart is not None:
@@ -152,7 +151,7 @@ class LazyArray(object):
       arr, box = childless_boxes.pop()
       sorted_boxes.append((arr, box))
       invals, _, primitive, params, _ = arr.eqn
-      instarts, counts = backward_rules[primitive](box, *invals, **params)
+      instarts, counts, _ = backward_rules[primitive](box, *invals, **params)
       for ival, istart, count in zip(invals, instarts, counts):
         if isinstance(ival, LazyArray) and istart is not None:
           ibox = istart, count.shape
@@ -179,7 +178,14 @@ class LazyArray(object):
         assert np.all(getbox(arr.state, ubox) == REQUESTED), \
             'Repeated computation detected'
         invals = [v.cache if isinstance(v, LazyArray) else v for v in invals]
-        arr.cache = update_rules[primitive](arr.cache, ubox, *invals, **params)
+        instarts, incounts, outslice_fun = backward_rules[primitive](ubox, *invals, **params)
+        inshapes = [None if c is None else c.shape for c in incounts]
+        inslices = [None if instart is None else
+                    lax.dynamic_slice(arg, instart, inshape)
+                    for arg, instart, inshape in zip(invals, instarts, inshapes)]
+        outslice = outslice_fun(*inslices)
+        outstart, _ = ubox
+        arr.cache = lax.dynamic_update_slice(arr.cache, outslice, outstart)
         setbox(arr.state, ubox, KNOWN)
     return self.cache[box_to_slice(box)]
 
