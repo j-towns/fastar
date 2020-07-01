@@ -1,13 +1,10 @@
 import jax.numpy as jnp
 import jax.core as jc
-from jax.interpreters import partial_eval as pe
-from jax.util import safe_map, safe_zip, partial
-from jax import make_jaxpr
+from jax.util import safe_map, safe_zip
 from jax import lax
-from jax.ops import index_update
 from fastar.box_util import (
-    box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
-    addbox, circular_add, circular_get)
+  box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
+  circular_add, circular_get)
 from fastar.jaxpr_util import Literal_, inf
 import numpy as np
 
@@ -131,7 +128,7 @@ class LazyArray(object):
         raise NotImplementedError
       else:
         instarts, counts, _ = backward_rules[primitive](
-            to_global_coords(ubox), *invals, **params)
+            to_global_coords(ubox), *(v.shape for v in invals), **params)
         for ival, istart, count in zip(invals, instarts, counts):
           if isinstance(ival, LazyArray) and istart is not None:
             ibox = istart, count.shape
@@ -151,7 +148,7 @@ class LazyArray(object):
       arr, box = childless_boxes.pop()
       sorted_boxes.append((arr, box))
       invals, _, primitive, params, _ = arr.eqn
-      instarts, counts, _ = backward_rules[primitive](box, *invals, **params)
+      instarts, counts, _ = backward_rules[primitive](box, *(v.shape for v in invals), **params)
       for ival, istart, count in zip(invals, instarts, counts):
         if isinstance(ival, LazyArray) and istart is not None:
           ibox = istart, count.shape
@@ -178,11 +175,10 @@ class LazyArray(object):
         assert np.all(getbox(arr.state, ubox) == REQUESTED), \
             'Repeated computation detected'
         invals = [v.cache if isinstance(v, LazyArray) else v for v in invals]
-        instarts, incounts, outslice_fun = backward_rules[primitive](ubox, *invals, **params)
-        inshapes = [None if c is None else c.shape for c in incounts]
+        instarts, incounts, outslice_fun = backward_rules[primitive](ubox, *(v.shape for v in invals), **params)
         inslices = [None if instart is None else
-                    lax.dynamic_slice(arg, instart, inshape)
-                    for arg, instart, inshape in zip(invals, instarts, inshapes)]
+                    lax.dynamic_slice(arg, instart, incount.shape)
+                    for arg, instart, incount in zip(invals, instarts, incounts)]
         outslice = outslice_fun(*inslices)
         outstart, _ = ubox
         arr.cache = lax.dynamic_update_slice(arr.cache, outslice, outstart)

@@ -145,7 +145,7 @@ LAX_OPS = [
      for shape_group in compatible_shapes
      for shapes in CombosWithReplacement(shape_group, rec.nargs)
      for dtype in rec.dtypes])
-def test_lazy(op_name, rng_factory, shapes, dtype, tol):
+def test_nary(op_name, rng_factory, shapes, dtype, tol):
   rng = rng_factory(np.random)
   args = [rng(shape, dtype) for shape in shapes]
   tu.check_lazy_fun(getattr(lax, op_name), *args, atol=tol, rtol=tol)
@@ -330,6 +330,6 @@ def test_broadcast_in_dim(inshape, dtype, outshape, dimensions, rng_factory):
    for dtype in default_dtypes])
 def test_pad(shape, dtype, padding_config, rng_factory):
   rng = rng_factory(np.random)
-  args = [rng(shape, dtype)]
-  op = lambda operand: lax.pad(operand, np.array(-1, dtype), padding_config)
+  args = [rng(shape, dtype), rng((), dtype)]
+  op = lambda *args: lax.pad(*args, padding_config)
   tu.check_lazy_fun(op, *args)
