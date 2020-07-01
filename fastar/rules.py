@@ -15,8 +15,8 @@ def naryop_backward_rule(prim, outbox, *shapes, **params):
   shapes = [np.array(shape) for shape in shapes]
   instarts = [np.where(shape == 1, 0, outstarts) if shape.size else []
               for shape in shapes]
-  incounts = [np.full(shape=np.where(shape == 1, 1, outshape),
-                      fill_value=np.prod(np.where(shape == 1, outshape, 1)))
+  incounts = [np.full(np.where(shape == 1, 1, outshape),
+                      prod(np.where(shape == 1, outshape, 1)))
               if shape.size else np.prod(outshape, dtype=int)
               for shape in shapes]
   return instarts, incounts, lambda *inslices: prim.bind(*inslices, **params)
@@ -130,7 +130,7 @@ def concatenate_backward_rule(outbox, *shapes, dimension):
   dimstart, dimshape = outstart[dim], outshape[dim]
   position = 0
   instarts = []
-  inshapes = []
+  incounts = []
   for shape in shapes:
     if dimstart < position + shape[dim] and position < dimstart + dimshape:
       instart = (outstart[:dim]
@@ -140,14 +140,14 @@ def concatenate_backward_rule(outbox, *shapes, dimension):
                         position + shape[dim] - instart[dim])]
                  + outshape[dim + 1:])
       instarts.append(instart)
-      inshapes.append(inshape)
+      incounts.append(np.ones(inshape, int))
     else:
       instarts.append(None)
-      inshapes.append(None)
+      incounts.append(None)
     position += shape[dim]
 
-  return (instarts, [None if inshape is None else np.ones(inshape, int) for inshape in inshapes],
-          lambda *inslices: lax.concatenate([x for x in inslices if x is not None], dimension))
+  return instarts, incounts, lambda *inslices: lax.concatenate(
+    [x for x in inslices if x is not None], dimension)
 
 backward_rules[lax.concatenate_p] = concatenate_backward_rule
 
@@ -179,26 +179,17 @@ def rev_backward_rule(outbox, shape, dimensions):
 
 backward_rules[lax.rev_p] = rev_backward_rule
 
-def broadcast_in_dim_backward_rule(outbox, oshape, shape, broadcast_dimensions):
+def broadcast_in_dim_backward_rule(outbox, opshape, shape, broadcast_dimensions):
   outstart, outshape = outbox
-  instart = []
-  inshape = []
-  incount = 1
-  for d in range(len(outstart)):
-    if d in broadcast_dimensions:
-      instart.append(outstart[d])
-      (indim,), = np.argwhere(np.equal(broadcast_dimensions, d))
-      insize = oshape[indim]
-      is_broadcast = shape[d] != insize
-      if is_broadcast:
-        assert insize == 1
-        incount *= outshape[d]
-      inshape.append(1 if is_broadcast else outshape[d])
-    else:
-      incount *= outshape[d]
-
-  return ([instart], [np.full(inshape, incount)],
-          lambda inslice: lax.broadcast_in_dim(inslice, outshape, broadcast_dimensions))
+  is_broadcast = np.array([
+    d not in broadcast_dimensions or
+    shape[d] != opshape[np.argwhere(np.equal(broadcast_dimensions, d)).item()]
+    for d in range(len(outshape))])
+  instart = np.take(outstart, broadcast_dimensions)
+  inshape = np.take(np.where(is_broadcast, 1, outshape), broadcast_dimensions)
+  incount = np.full(inshape, prod(np.where(is_broadcast, outshape, 1)))
+  return [instart], [incount], lambda inslice: lax.broadcast_in_dim(
+    inslice, outshape, broadcast_dimensions)
 
 backward_rules[lax.broadcast_in_dim_p] = broadcast_in_dim_backward_rule
 
