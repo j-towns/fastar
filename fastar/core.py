@@ -118,7 +118,7 @@ class LazyArray(object):
     return self._aval.ndim
 
   def _compute_ancestral_child_counts(self, box):
-    invals, outvals, primitive, params, _ = self.eqn
+    invals, _, primitive, params, _ = self.eqn
     local_state = self.state[box_to_slice(box)] if self.shape else self.state
     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
     for ubox in box_finder(local_state, UNKNOWN):
@@ -145,27 +145,35 @@ class LazyArray(object):
         (self, to_global_coords(b)) for b in static_box_finder(
             (local_child_counts == 0) & (getbox(self.state, box) != KNOWN), 1)]
     while childless_boxes:
-      arr, box = childless_boxes.pop()
-      sorted_boxes.append((arr, box))
-      invals, _, primitive, params, _ = arr.eqn
-      instarts, counts, _ = backward_rules[primitive](box, *(v.shape for v in invals), **params)
-      for ival, istart, count in zip(invals, instarts, counts):
-        if isinstance(ival, LazyArray) and istart is not None:
-          ibox = istart, count.shape
-          to_iglobal_coords = lambda b: (np.add(istart, b[0]), b[1])
-          ival.child_counts.subtract(
-              ibox, count * (getbox(ival.state, ibox) != KNOWN))
-          ilocal_child_counts = ival.child_counts.get(ibox)
-          childless_boxes.extend(
-              [(ival, to_iglobal_coords(b))
-               for b in static_box_finder(
-                   (ilocal_child_counts == 0) &
-                   (getbox(ival.state, ibox) != KNOWN), 1)])
+      self.process_childless_box(childless_boxes, sorted_boxes)
     return sorted_boxes[::-1]
+
+  def process_childless_box(self, childless_boxes, sorted_boxes):
+    arr, box = childless_boxes.pop()
+    invals, _, primitive, params, _ = arr.eqn
+    instarts, counts, outslice_from_inslices = backward_rules[primitive](
+      box, *(v.shape for v in invals), **params)
+    def outslice_from_invals(invals):
+      inslices = (None if instart is None else
+                  lax.dynamic_slice(inval, instart, count.shape)
+                  for inval, instart, count in zip(invals, instarts, counts))
+      return outslice_from_inslices(*inslices)
+    sorted_boxes.append((arr, box, outslice_from_invals))
+    for ival, istart, count in zip(invals, instarts, counts):
+      if isinstance(ival, LazyArray) and istart is not None:
+        ibox = istart, count.shape
+        to_iglobal_coords = lambda b: (np.add(istart, b[0]), b[1])
+        ival.child_counts.subtract(
+          ibox, count * (getbox(ival.state, ibox) != KNOWN))
+        ilocal_child_counts = ival.child_counts.get(ibox)
+        childless_boxes.extend(
+          [(ival, to_iglobal_coords(b))
+           for b in static_box_finder((ilocal_child_counts == 0) &
+                                      (getbox(ival.state, ibox) != KNOWN), 1)])
 
   def _getbox(self, box):
     assert np.shape(box) == (2, self.ndim)
-    for arr, ubox in self._toposort(box):
+    for arr, ubox, outslice_from_invals in self._toposort(box):
       invals, _, primitive, params, _ = arr.eqn
       if primitive.multiple_results:
         raise NotImplementedError
@@ -175,11 +183,7 @@ class LazyArray(object):
         assert np.all(getbox(arr.state, ubox) == REQUESTED), \
             'Repeated computation detected'
         invals = [v.cache if isinstance(v, LazyArray) else v for v in invals]
-        instarts, incounts, outslice_fun = backward_rules[primitive](ubox, *(v.shape for v in invals), **params)
-        inslices = [None if instart is None else
-                    lax.dynamic_slice(arg, instart, incount.shape)
-                    for arg, instart, incount in zip(invals, instarts, incounts)]
-        outslice = outslice_fun(*inslices)
+        outslice = outslice_from_invals(invals)
         outstart, _ = ubox
         arr.cache = lax.dynamic_update_slice(arr.cache, outslice, outstart)
         setbox(arr.state, ubox, KNOWN)
