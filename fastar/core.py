@@ -1,3 +1,5 @@
+from typing import Callable, List
+
 import jax.numpy as jnp
 import jax.core as jc
 from jax.interpreters.xla import abstractify
@@ -139,29 +141,41 @@ class LazyArray(object):
                                   count * (getbox(ival.state, ibox) != KNOWN))
             ival._compute_ancestral_child_counts(ibox)
 
-  def _toposort(self, box):
+  def _toposorted_updates(self, box) -> List[Callable[[], None]]:
     self._compute_ancestral_child_counts(box)
     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
-    sorted_boxes = []
     local_child_counts = self.child_counts.get(box)
     childless_boxes = [
         (self, to_global_coords(b)) for b in static_box_finder(
             (local_child_counts == 0) & (getbox(self.state, box) != KNOWN), 1)]
+    sorted_updates = []
     while childless_boxes:
-      self.process_childless_box(childless_boxes, sorted_boxes)
-    return sorted_boxes[::-1]
+      self._process_childless_box(childless_boxes, sorted_updates)
+    return sorted_updates[::-1]
 
-  def process_childless_box(self, childless_boxes, sorted_boxes):
+  def _process_childless_box(self, childless_boxes,
+                             sorted_updates: List[Callable[[], None]]):
     arr, box = childless_boxes.pop()
     invals, _, primitive, params, _ = arr.eqn
     instarts, counts, outslice_from_inslices = backward_rules[primitive](
       box, *abstractify_lazy(invals), **params)
-    def outslice_from_invals(invals):
+    def update():
+      if primitive.multiple_results:
+        raise NotImplementedError
+      # TODO (j-towns): add option to disable this assert statement
+      # Check that none of this box has already been computed
+      assert np.all(getbox(arr.state, box) == REQUESTED), \
+        'Repeated computation detected'
+      invals_ = [val.cache if isinstance(val, LazyArray) else val
+                 for val in invals]
       inslices = (None if instart is None else
                   lax.dynamic_slice(inval, instart, count.shape)
-                  for inval, instart, count in zip(invals, instarts, counts))
-      return outslice_from_inslices(*inslices)
-    sorted_boxes.append((arr, box, outslice_from_invals))
+                  for inval, instart, count in zip(invals_, instarts, counts))
+      outslice = outslice_from_inslices(*inslices)
+      outstart, _ = box
+      arr.cache = lax.dynamic_update_slice(arr.cache, outslice, outstart)
+      setbox(arr.state, box, KNOWN)
+    sorted_updates.append(update)
     for ival, istart, count in zip(invals, instarts, counts):
       if isinstance(ival, LazyArray) and istart is not None:
         ibox = istart, count.shape
@@ -176,20 +190,8 @@ class LazyArray(object):
 
   def _getbox(self, box):
     assert np.shape(box) == (2, self.ndim)
-    for arr, ubox, outslice_from_invals in self._toposort(box):
-      invals, _, primitive, params, _ = arr.eqn
-      if primitive.multiple_results:
-        raise NotImplementedError
-      else:
-        # TODO (j-towns): add option to disable this assert statement
-        # Check that none of this box has already been computed
-        assert np.all(getbox(arr.state, ubox) == REQUESTED), \
-            'Repeated computation detected'
-        invals = [v.cache if isinstance(v, LazyArray) else v for v in invals]
-        outslice = outslice_from_invals(invals)
-        outstart, _ = ubox
-        arr.cache = lax.dynamic_update_slice(arr.cache, outslice, outstart)
-        setbox(arr.state, ubox, KNOWN)
+    for update in self._toposorted_updates(box):
+      update()
     return self.cache[box_to_slice(box)]
 
   def __getitem__(self, idx):
