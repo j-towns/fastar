@@ -21,7 +21,7 @@ KNOWN = 1
 
 CACHE_SIZE = 128
 
-backward_rules = {}
+dependency_rules = {}
 
 def abstractify_lazy(invals):
   return [abstractify(v.cache) if isinstance(v, LazyArray) else v for v in invals]
@@ -129,10 +129,10 @@ class LazyArray(object):
     for ubox in box_finder(local_state, UNKNOWN):
       setbox(local_state, ubox, REQUESTED)
       if primitive.multiple_results:
-        # TODO: pass var_idx to the backward rule
+        # TODO: pass var_idx to the dependency rule
         raise NotImplementedError
       else:
-        instarts, counts, _ = backward_rules[primitive](
+        instarts, counts, _ = dependency_rules[primitive](
             to_global_coords(ubox), *abstractify_lazy(invals), **params)
         for ival, istart, count in zip(invals, instarts, counts):
           if isinstance(ival, LazyArray) and istart is not None:
@@ -157,7 +157,7 @@ class LazyArray(object):
                              sorted_updates: List[Callable[[], None]]):
     arr, box = childless_boxes.pop()
     invals, _, primitive, params, _ = arr.eqn
-    instarts, counts, outslice_from_inslices = backward_rules[primitive](
+    instarts, counts, outslice_from_inslices = dependency_rules[primitive](
       box, *abstractify_lazy(invals), **params)
     def update():
       if primitive.multiple_results:

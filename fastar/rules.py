@@ -4,13 +4,13 @@ import numpy as np
 from jax import lax, numpy as jnp
 from jax.util import safe_map, safe_zip, curry, unzip2, prod, unzip3
 
-from fastar.core import backward_rules
+from fastar.core import dependency_rules
 
 map = safe_map
 zip = safe_zip
 
 @curry
-def naryop_backward_rule(prim, outbox, *operands, **params):
+def naryop_dependency_rule(prim, outbox, *operands, **params):
   outstarts, outshape = outbox
   shapes = [np.array(o.shape) for o in operands]
   instarts = [np.where(shape == 1, 0, outstarts) if len(shape) else []
@@ -87,10 +87,10 @@ naryops = [
 ]
 
 for op in naryops:
-  backward_rules[op] = naryop_backward_rule(op)
+  dependency_rules[op] = naryop_dependency_rule(op)
 
 @curry
-def reduce_backward_rule(prim, outbox, operand, axes):
+def reduce_dependency_rule(prim, outbox, operand, axes):
   outstart, outshape = outbox
   instart = list(outstart)
   inshape = list(outshape)
@@ -110,9 +110,9 @@ reduce_ops = [
 ]
 
 for op in reduce_ops:
-  backward_rules[op] = reduce_backward_rule(op)
+  dependency_rules[op] = reduce_dependency_rule(op)
 
-def squeeze_backward_rule(outbox, _, dimensions):
+def squeeze_dependency_rule(outbox, _, dimensions):
   outstart, outshape = outbox
   instart = list(outstart)
   inshape = list(outshape)
@@ -122,9 +122,9 @@ def squeeze_backward_rule(outbox, _, dimensions):
   return ([instart], [np.ones(inshape, int)],
           lambda inslice: lax.squeeze(inslice, dimensions))
 
-backward_rules[lax.squeeze_p] = squeeze_backward_rule
+dependency_rules[lax.squeeze_p] = squeeze_dependency_rule
 
-def concatenate_backward_rule(outbox, *operands, dimension):
+def concatenate_dependency_rule(outbox, *operands, dimension):
   dim = dimension
   outstart, outshape = map(list, outbox)
   dimstart, dimshape = outstart[dim], outshape[dim]
@@ -150,27 +150,27 @@ def concatenate_backward_rule(outbox, *operands, dimension):
   return instarts, incounts, lambda *inslices: lax.concatenate(
     [x for x in inslices if x is not None], dimension)
 
-backward_rules[lax.concatenate_p] = concatenate_backward_rule
+dependency_rules[lax.concatenate_p] = concatenate_dependency_rule
 
-def slice_backward_rule(outbox, _, start_indices, limit_indices, strides):
+def slice_dependency_rule(outbox, _, start_indices, limit_indices, strides):
   if strides is not None:
     raise NotImplementedError('Strided slice is not yet implemented')
   outstart, outshape = outbox
   return ([np.add(outstart, start_indices)], [np.ones(outshape, int)],
           lambda inslice: inslice)
 
-backward_rules[lax.slice_p] = slice_backward_rule
+dependency_rules[lax.slice_p] = slice_dependency_rule
 
-def transpose_backward_rule(outbox, _, permutation):
+def transpose_dependency_rule(outbox, _, permutation):
   outstart, outshape = outbox
   inverse_perm = np.argsort(permutation)
   return ([np.take(outstart, inverse_perm)],
           [np.ones(np.take(outshape, inverse_perm), int)],
           lambda inslice: lax.transpose(inslice, permutation))
 
-backward_rules[lax.transpose_p] = transpose_backward_rule
+dependency_rules[lax.transpose_p] = transpose_dependency_rule
 
-def rev_backward_rule(outbox, operand, dimensions):
+def rev_dependency_rule(outbox, operand, dimensions):
   outstart, outshape = outbox
   instart = [size - (start + outsize) if d in dimensions else start
              for d, (size, outsize, start)
@@ -178,9 +178,9 @@ def rev_backward_rule(outbox, operand, dimensions):
   return ([instart], [np.ones(outshape, int)],
           lambda inslice: lax.rev(inslice, dimensions))
 
-backward_rules[lax.rev_p] = rev_backward_rule
+dependency_rules[lax.rev_p] = rev_dependency_rule
 
-def broadcast_in_dim_backward_rule(
+def broadcast_in_dim_dependency_rule(
     outbox, operand, shape, broadcast_dimensions):
   outstart, outshape = outbox
   is_broadcast = np.array([
@@ -193,26 +193,26 @@ def broadcast_in_dim_backward_rule(
   return [instart], [incount], lambda inslice: lax.broadcast_in_dim(
     inslice, outshape, broadcast_dimensions)
 
-backward_rules[lax.broadcast_in_dim_p] = broadcast_in_dim_backward_rule
+dependency_rules[lax.broadcast_in_dim_p] = broadcast_in_dim_dependency_rule
 
-def dot_general_backward_rule(outbox, lhs, rhs, dimension_numbers, precision):
+def dot_general_dependency_rule(outbox, lhs, rhs, dimension_numbers, precision):
   out_start, out_shape = outbox
   outslices = list(zip(*outbox))
   (lhs_contracting, rhs_contracting), (lhs_batch, rhs_batch) = dimension_numbers
   lhs_other_out_dims = list(range(len(lhs_batch), len(lhs.shape) - len(lhs_contracting)))
   rhs_other_out_dims = list(range(len(rhs_batch) + len(lhs_other_out_dims), len(out_shape)))
   lhs_outbox = unzip2([outslices[d] for d in list(lhs_batch) + lhs_other_out_dims])
-  (lhs_start,), (lhs_incount,), _ = reduce_backward_rule(None)(lhs_outbox, lhs, axes=lhs_contracting)
+  (lhs_start,), (lhs_incount,), _ = reduce_dependency_rule(None)(lhs_outbox, lhs, axes=lhs_contracting)
   rhs_outbox = unzip2([outslices[d] for d in list(rhs_batch) + rhs_other_out_dims])
-  (rhs_start,), (rhs_incount,), _ = reduce_backward_rule(None)(rhs_outbox, rhs, axes=rhs_contracting)
+  (rhs_start,), (rhs_incount,), _ = reduce_dependency_rule(None)(rhs_outbox, rhs, axes=rhs_contracting)
   incounts =  [lhs_incount * prod([out_shape[d] for d in rhs_other_out_dims]),
                rhs_incount * prod([out_shape[d] for d in lhs_other_out_dims])]
   return ([lhs_start, rhs_start], incounts,
           lambda *inslices: lax.dot_general(*inslices, dimension_numbers, precision))
 
-backward_rules[lax.dot_general_p] = dot_general_backward_rule
+dependency_rules[lax.dot_general_p] = dot_general_dependency_rule
 
-def pad_backward_rule(outbox, operand, _, padding_config):
+def pad_dependency_rule(outbox, operand, _, padding_config):
   outstart, outshape = outbox
   lo, _, interior = unzip3(padding_config)
   dilation = np.array(interior) + 1
@@ -235,4 +235,4 @@ def pad_backward_rule(outbox, operand, _, padding_config):
   return ([instart if insize else None, ()],
           [np.ones(inshape, int) if insize else None, padcount], outslice)
 
-backward_rules[lax.pad_p] = pad_backward_rule
+dependency_rules[lax.pad_p] = pad_dependency_rule
