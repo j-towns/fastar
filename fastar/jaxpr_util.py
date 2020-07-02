@@ -1,3 +1,4 @@
+from typing import Sequence
 import numpy as np
 
 from jax import linear_util as lu
@@ -103,13 +104,38 @@ abstract_arrays._DIMENSION_TYPES.add(InfType)
 inf = InfType()
 _neginf = InfType(neg=True)
 
+class NoJitStagingJaxprTrace(pe.StagingJaxprTrace):
+  def process_call(self, primitive, f: lu.WrappedFun, tracers, params):
+    return f.call_wrapped(*tracers)
+
+@lu.transformation
+def trace_to_subjaxpr_nojit(master: jc.MasterTrace,
+                            pvals: Sequence[pe.PartialVal]):
+  assert all([isinstance(pv, pe.PartialVal) for pv in pvals]), pvals
+  trace = NoJitStagingJaxprTrace(master, jc.cur_sublevel())
+  in_tracers = map(trace.new_arg, pvals)
+  ans = yield in_tracers, {}
+  out_tracers = map(trace.full_raise, map(jc.full_lower, ans))
+  out_tracers = map(partial(pe.instantiate_const_at, trace), [True] * len(ans), out_tracers)
+  jaxpr, consts, env = pe.tracers_to_jaxpr(in_tracers, out_tracers)
+  out_pvals = [t.pval for t in out_tracers]
+  del trace, in_tracers, out_tracers
+  yield jaxpr, (out_pvals, consts, env)
+
+def trace_to_jaxpr_nojit(flat_fun, in_pvals):
+  with jc.new_master(NoJitStagingJaxprTrace) as master:
+    fun = trace_to_subjaxpr_nojit(flat_fun, master)
+    jaxpr, (out_pvals, consts, env) = fun.call_wrapped(in_pvals)
+    assert not env
+    del master
+  return jaxpr, out_pvals, consts
+
 def fastar_jaxpr(flat_fun, *args_flat):
   def abstractify(x):
     return ShapedArray(np.shape(x), dtypes.result_type(x))
   in_avals = map(abstractify, args_flat)
   in_pvals = map(pe.PartialVal.unknown, in_avals)
-  jaxpr, out_pvals, consts = pe.trace_to_jaxpr(
-      flat_fun, in_pvals, instantiate=True, stage_out=True)
+  jaxpr, out_pvals, consts = trace_to_jaxpr_nojit(flat_fun, in_pvals)
   out_avals = [v.get_aval() for v in out_pvals]
   return TypedJaxpr(submerge_consts(jaxpr, consts), [], in_avals, out_avals)
 
