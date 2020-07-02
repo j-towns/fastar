@@ -153,11 +153,12 @@ def concatenate_dependency_rule(outbox, *operands, dimension):
 dependency_rules[lax.concatenate_p] = concatenate_dependency_rule
 
 def slice_dependency_rule(outbox, _, start_indices, limit_indices, strides):
-  if strides is not None:
-    raise NotImplementedError('Strided slice is not yet implemented')
   outstart, outshape = outbox
-  return ([np.add(outstart, start_indices)], [np.ones(outshape, int)],
-          lambda inslice: inslice)
+  strides = np.ones_like(outshape) if strides is None else np.array(strides)
+  zeros = np.zeros_like(outshape)
+  return ([outstart * strides + start_indices],
+          [lax.pad(np.ones(outshape, int), 0, zip(zeros, zeros, strides - 1))],
+          lambda inslice: lax.slice(inslice, zeros, inslice.shape, strides))
 
 dependency_rules[lax.slice_p] = slice_dependency_rule
 
