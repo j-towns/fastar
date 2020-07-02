@@ -1,13 +1,13 @@
+from typing import Callable, List
+
 import jax.numpy as jnp
 import jax.core as jc
-from jax.interpreters import partial_eval as pe
-from jax.util import safe_map, safe_zip, partial
-from jax import make_jaxpr
+from jax.interpreters.xla import abstractify
+from jax.util import safe_map, safe_zip
 from jax import lax
-from jax.ops import index_update
 from fastar.box_util import (
-    box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
-    addbox, circular_add, circular_get)
+  box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
+  circular_add, circular_get)
 from fastar.jaxpr_util import Literal_, inf
 import numpy as np
 
@@ -21,9 +21,10 @@ KNOWN = 1
 
 CACHE_SIZE = 128
 
-backward_rules = {}
-update_rules = {}
+dependency_rules = {}
 
+def abstractify_lazy(invals):
+  return [abstractify(v.cache) if isinstance(v, LazyArray) else v for v in invals]
 
 class LazyError(Exception): pass
 
@@ -122,17 +123,17 @@ class LazyArray(object):
     return self._aval.ndim
 
   def _compute_ancestral_child_counts(self, box):
-    invals, outvals, primitive, params, _ = self.eqn
+    invals, _, primitive, params, _ = self.eqn
     local_state = self.state[box_to_slice(box)] if self.shape else self.state
     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
     for ubox in box_finder(local_state, UNKNOWN):
       setbox(local_state, ubox, REQUESTED)
       if primitive.multiple_results:
-        # TODO: pass var_idx to the backward rule
+        # TODO: pass var_idx to the dependency rule
         raise NotImplementedError
       else:
-        instarts, counts = backward_rules[primitive](
-            to_global_coords(ubox), *invals, **params)
+        instarts, counts, _ = dependency_rules[primitive](
+            to_global_coords(ubox), *abstractify_lazy(invals), **params)
         for ival, istart, count in zip(invals, instarts, counts):
           if isinstance(ival, LazyArray) and istart is not None:
             ibox = istart, count.shape
@@ -140,47 +141,57 @@ class LazyArray(object):
                                   count * (getbox(ival.state, ibox) != KNOWN))
             ival._compute_ancestral_child_counts(ibox)
 
-  def _toposort(self, box):
+  def _toposorted_updates(self, box) -> List[Callable[[], None]]:
     self._compute_ancestral_child_counts(box)
     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
-    sorted_boxes = []
     local_child_counts = self.child_counts.get(box)
     childless_boxes = [
         (self, to_global_coords(b)) for b in static_box_finder(
             (local_child_counts == 0) & (getbox(self.state, box) != KNOWN), 1)]
+    sorted_updates = []
     while childless_boxes:
-      arr, box = childless_boxes.pop()
-      sorted_boxes.append((arr, box))
-      invals, _, primitive, params, _ = arr.eqn
-      instarts, counts = backward_rules[primitive](box, *invals, **params)
-      for ival, istart, count in zip(invals, instarts, counts):
-        if isinstance(ival, LazyArray) and istart is not None:
-          ibox = istart, count.shape
-          to_iglobal_coords = lambda b: (np.add(istart, b[0]), b[1])
-          ival.child_counts.subtract(
-              ibox, count * (getbox(ival.state, ibox) != KNOWN))
-          ilocal_child_counts = ival.child_counts.get(ibox)
-          childless_boxes.extend(
-              [(ival, to_iglobal_coords(b))
-               for b in static_box_finder(
-                   (ilocal_child_counts == 0) &
-                   (getbox(ival.state, ibox) != KNOWN), 1)])
-    return sorted_boxes[::-1]
+      self._process_childless_box(childless_boxes, sorted_updates)
+    return sorted_updates[::-1]
+
+  def _process_childless_box(self, childless_boxes,
+                             sorted_updates: List[Callable[[], None]]):
+    arr, box = childless_boxes.pop()
+    invals, _, primitive, params, _ = arr.eqn
+    instarts, counts, outslice_from_inslices = dependency_rules[primitive](
+      box, *abstractify_lazy(invals), **params)
+    def update():
+      if primitive.multiple_results:
+        raise NotImplementedError
+      # TODO (j-towns): add option to disable this assert statement
+      # Check that none of this box has already been computed
+      assert np.all(getbox(arr.state, box) == REQUESTED), \
+        'Repeated computation detected'
+      invals_ = [val.cache if isinstance(val, LazyArray) else val
+                 for val in invals]
+      inslices = (None if instart is None else
+                  lax.dynamic_slice(inval, instart, count.shape)
+                  for inval, instart, count in zip(invals_, instarts, counts))
+      outslice = outslice_from_inslices(*inslices)
+      outstart, _ = box
+      arr.cache = lax.dynamic_update_slice(arr.cache, outslice, outstart)
+      setbox(arr.state, box, KNOWN)
+    sorted_updates.append(update)
+    for ival, istart, count in zip(invals, instarts, counts):
+      if isinstance(ival, LazyArray) and istart is not None:
+        ibox = istart, count.shape
+        to_iglobal_coords = lambda b: (np.add(istart, b[0]), b[1])
+        ival.child_counts.subtract(
+          ibox, count * (getbox(ival.state, ibox) != KNOWN))
+        ilocal_child_counts = ival.child_counts.get(ibox)
+        childless_boxes.extend(
+          [(ival, to_iglobal_coords(b))
+           for b in static_box_finder((ilocal_child_counts == 0) &
+                                      (getbox(ival.state, ibox) != KNOWN), 1)])
 
   def _getbox(self, box):
     assert np.shape(box) == (2, self.ndim)
-    for arr, ubox in self._toposort(box):
-      invals, _, primitive, params, _ = arr.eqn
-      if primitive.multiple_results:
-        raise NotImplementedError
-      else:
-        # TODO (j-towns): add option to disable this assert statement
-        # Check that none of this box has already been computed
-        assert np.all(getbox(arr.state, ubox) == REQUESTED), \
-            'Repeated computation detected'
-        invals = [v.cache if isinstance(v, LazyArray) else v for v in invals]
-        arr.cache = update_rules[primitive](arr.cache, ubox, *invals, **params)
-        setbox(arr.state, ubox, KNOWN)
+    for update in self._toposorted_updates(box):
+      update()
     return self.cache[box_to_slice(box)]
 
   def __getitem__(self, idx):
