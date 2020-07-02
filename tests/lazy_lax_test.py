@@ -5,7 +5,7 @@ from functools import partial
 import pytest
 import numpy as np
 
-from jax import dtypes
+from jax import dtypes, jit
 import jax.test_util as jtu
 from jax import lax
 
@@ -333,3 +333,11 @@ def test_pad(shape, dtype, padding_config, rng_factory):
   args = [rng(shape, dtype), rng((), dtype)]
   op = lambda *args: lax.pad(*args, padding_config)
   tu.check_lazy_fun(op, *args)
+
+def test_jit():
+  rng = jtu.rand_small(np.random)
+  tu.check_lazy_fun(jit(lambda x: x * 2), rng((1,), int))
+
+def test_jit_freevar():
+  rng = jtu.rand_small(np.random)
+  tu.check_lazy_fun(lambda x, y: jit(lambda x: x * y)(x), rng((1,), int), rng((1,), int))
