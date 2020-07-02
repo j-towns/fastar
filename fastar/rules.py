@@ -10,14 +10,14 @@ map = safe_map
 zip = safe_zip
 
 @curry
-def naryop_backward_rule(prim, outbox, *shapes, **params):
+def naryop_backward_rule(prim, outbox, *operands, **params):
   outstarts, outshape = outbox
-  shapes = [np.array(shape) for shape in shapes]
-  instarts = [np.where(shape == 1, 0, outstarts) if shape.size else []
+  shapes = [np.array(o.shape) for o in operands]
+  instarts = [np.where(shape == 1, 0, outstarts) if len(shape) else []
               for shape in shapes]
   incounts = [np.full(np.where(shape == 1, 1, outshape),
                       prod(np.where(shape == 1, outshape, 1)))
-              if shape.size else np.prod(outshape, dtype=int)
+              if len(shape) else np.prod(outshape, dtype=int)
               for shape in shapes]
   return instarts, incounts, lambda *inslices: prim.bind(*inslices, **params)
 
@@ -90,13 +90,13 @@ for op in naryops:
   backward_rules[op] = naryop_backward_rule(op)
 
 @curry
-def reduce_backward_rule(prim, outbox, shape, axes):
+def reduce_backward_rule(prim, outbox, operand, axes):
   outstart, outshape = outbox
   instart = list(outstart)
   inshape = list(outshape)
   for d in np.sort(axes):
     instart.insert(d, 0)
-    inshape.insert(d, shape[d])
+    inshape.insert(d, operand.shape[d])
   return ([instart], [np.ones(inshape, int)],
           lambda inslice: prim.bind(inslice, axes=axes))
 
@@ -112,7 +112,7 @@ reduce_ops = [
 for op in reduce_ops:
   backward_rules[op] = reduce_backward_rule(op)
 
-def squeeze_backward_rule(outbox, shape, dimensions):
+def squeeze_backward_rule(outbox, _, dimensions):
   outstart, outshape = outbox
   instart = list(outstart)
   inshape = list(outshape)
@@ -124,14 +124,15 @@ def squeeze_backward_rule(outbox, shape, dimensions):
 
 backward_rules[lax.squeeze_p] = squeeze_backward_rule
 
-def concatenate_backward_rule(outbox, *shapes, dimension):
+def concatenate_backward_rule(outbox, *operands, dimension):
   dim = dimension
   outstart, outshape = map(list, outbox)
   dimstart, dimshape = outstart[dim], outshape[dim]
   position = 0
   instarts = []
   incounts = []
-  for shape in shapes:
+  for operand in operands:
+    shape = operand.shape
     if dimstart < position + shape[dim] and position < dimstart + dimshape:
       instart = (outstart[:dim]
                  + [max(0, dimstart - position)] + outstart[dim + 1:])
@@ -169,21 +170,22 @@ def transpose_backward_rule(outbox, _, permutation):
 
 backward_rules[lax.transpose_p] = transpose_backward_rule
 
-def rev_backward_rule(outbox, shape, dimensions):
+def rev_backward_rule(outbox, operand, dimensions):
   outstart, outshape = outbox
   instart = [size - (start + outsize) if d in dimensions else start
              for d, (size, outsize, start)
-             in enumerate(zip(shape, outshape, outstart))]
+             in enumerate(zip(operand.shape, outshape, outstart))]
   return ([instart], [np.ones(outshape, int)],
           lambda inslice: lax.rev(inslice, dimensions))
 
 backward_rules[lax.rev_p] = rev_backward_rule
 
-def broadcast_in_dim_backward_rule(outbox, opshape, shape, broadcast_dimensions):
+def broadcast_in_dim_backward_rule(
+    outbox, operand, shape, broadcast_dimensions):
   outstart, outshape = outbox
   is_broadcast = np.array([
     d not in broadcast_dimensions or
-    shape[d] != opshape[np.argwhere(np.equal(broadcast_dimensions, d)).item()]
+    shape[d] != operand.shape[np.argwhere(np.equal(broadcast_dimensions, d)).item()]
     for d in range(len(outshape))])
   instart = np.take(outstart, broadcast_dimensions)
   inshape = np.take(np.where(is_broadcast, 1, outshape), broadcast_dimensions)
@@ -193,16 +195,16 @@ def broadcast_in_dim_backward_rule(outbox, opshape, shape, broadcast_dimensions)
 
 backward_rules[lax.broadcast_in_dim_p] = broadcast_in_dim_backward_rule
 
-def dot_general_backward_rule(outbox, lhs_shape, rhs_shape, dimension_numbers, precision):
+def dot_general_backward_rule(outbox, lhs, rhs, dimension_numbers, precision):
   out_start, out_shape = outbox
   outslices = list(zip(*outbox))
   (lhs_contracting, rhs_contracting), (lhs_batch, rhs_batch) = dimension_numbers
-  lhs_other_out_dims = list(range(len(lhs_batch), len(lhs_shape) - len(lhs_contracting)))
+  lhs_other_out_dims = list(range(len(lhs_batch), len(lhs.shape) - len(lhs_contracting)))
   rhs_other_out_dims = list(range(len(rhs_batch) + len(lhs_other_out_dims), len(out_shape)))
   lhs_outbox = unzip2([outslices[d] for d in list(lhs_batch) + lhs_other_out_dims])
-  (lhs_start,), (lhs_incount,), _ = reduce_backward_rule(None)(lhs_outbox, lhs_shape, axes=lhs_contracting)
+  (lhs_start,), (lhs_incount,), _ = reduce_backward_rule(None)(lhs_outbox, lhs, axes=lhs_contracting)
   rhs_outbox = unzip2([outslices[d] for d in list(rhs_batch) + rhs_other_out_dims])
-  (rhs_start,), (rhs_incount,), _ = reduce_backward_rule(None)(rhs_outbox, rhs_shape, axes=rhs_contracting)
+  (rhs_start,), (rhs_incount,), _ = reduce_backward_rule(None)(rhs_outbox, rhs, axes=rhs_contracting)
   incounts =  [lhs_incount * prod([out_shape[d] for d in rhs_other_out_dims]),
                rhs_incount * prod([out_shape[d] for d in lhs_other_out_dims])]
   return ([lhs_start, rhs_start], incounts,
@@ -210,12 +212,12 @@ def dot_general_backward_rule(outbox, lhs_shape, rhs_shape, dimension_numbers, p
 
 backward_rules[lax.dot_general_p] = dot_general_backward_rule
 
-def pad_backward_rule(outbox, shape, _, padding_config):
+def pad_backward_rule(outbox, operand, _, padding_config):
   outstart, outshape = outbox
   lo, _, interior = unzip3(padding_config)
   dilation = np.array(interior) + 1
   assert type(outstart) == np.ndarray
-  inclip = lambda indices: np.clip(indices, 0, shape)
+  inclip = lambda indices: np.clip(indices, 0, operand.shape)
   lo_sign = np.where(np.less(lo, 0), -1, 1)
   instart = inclip(lo_sign * np.floor_divide(lo_sign * (outstart - lo), dilation))
   instop = inclip(lax.lax._ceil_divide(outstart + outshape - lo, dilation))

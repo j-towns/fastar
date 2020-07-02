@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 import jax.core as jc
+from jax.interpreters.xla import abstractify
 from jax.util import safe_map, safe_zip
 from jax import lax
 from fastar.box_util import (
@@ -20,6 +21,8 @@ CACHE_SIZE = 128
 
 backward_rules = {}
 
+def abstractify_lazy(invals):
+  return [abstractify(v.cache) if isinstance(v, LazyArray) else v for v in invals]
 
 class LazyError(Exception): pass
 
@@ -128,7 +131,7 @@ class LazyArray(object):
         raise NotImplementedError
       else:
         instarts, counts, _ = backward_rules[primitive](
-            to_global_coords(ubox), *(v.shape for v in invals), **params)
+            to_global_coords(ubox), *abstractify_lazy(invals), **params)
         for ival, istart, count in zip(invals, instarts, counts):
           if isinstance(ival, LazyArray) and istart is not None:
             ibox = istart, count.shape
@@ -152,7 +155,7 @@ class LazyArray(object):
     arr, box = childless_boxes.pop()
     invals, _, primitive, params, _ = arr.eqn
     instarts, counts, outslice_from_inslices = backward_rules[primitive](
-      box, *(v.shape for v in invals), **params)
+      box, *abstractify_lazy(invals), **params)
     def outslice_from_invals(invals):
       inslices = (None if instart is None else
                   lax.dynamic_slice(inval, instart, count.shape)
