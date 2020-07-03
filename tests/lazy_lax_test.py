@@ -10,6 +10,7 @@ import jax.test_util as jtu
 from jax import lax
 
 import fastar.test_util as tu
+from fastar.rules import valid_conv_lhs_count
 
 # This is borrowed from lax_tests.py in the JAX tests directory.
 # TODO import directly from lax_tests.py
@@ -332,6 +333,73 @@ def test_pad(shape, dtype, padding_config, rng_factory):
   args = [rng(shape, dtype), rng((), dtype)]
   op = lambda *args: lax.pad(*args, padding_config)
   tu.check_lazy_fun(op, *args)
+
+@pytest.mark.parametrize(
+  'lhs_shape,rhs_shape,dtype,strides,padding,rng_factory',
+  [(lhs_shape, rhs_shape, dtype, strides, padding, rng_factory)
+   for lhs_shape, rhs_shape in [
+     ((b, i, 9, 10), (j, i, 4, 5))
+     for b, i, j in itertools.product([2, 3], repeat=3)]
+   for dtype in float_dtypes
+   for strides in [(1, 1), ] # TODO (1, 2), (2, 1)
+   for padding in ["VALID", "SAME"]
+   for rng_factory in [jtu.rand_small]])
+def test_conv(lhs_shape, rhs_shape, dtype, strides, padding, rng_factory):
+  rng = rng_factory(np.random)
+  args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
+  fun = lambda lhs, rhs: lax.conv(lhs, rhs, strides, padding)
+  tu.check_lazy_fun(fun, *args)
+
+@pytest.mark.parametrize(
+  'lhs_shape,rhs_shape,dtype,strides,padding,lhs_dilation,rhs_dilation,'
+  'feature_group_count,batch_group_count,dimension_numbers,perms,rng_factory',
+  [(lhs_shape, rhs_shape, dtype, strides, padding, lhs_dilation, rhs_dilation,
+    feature_group_count, batch_group_count, dimension_numbers, perms, rng_factory)
+  for batch_group_count, feature_group_count in [(1, 1)] #, (2, 1), (1, 2)
+  for lhs_shape, rhs_shape in [
+    ((b * batch_group_count, i * feature_group_count, 9, w),
+     (j * feature_group_count * batch_group_count, i, 4, 5))
+    for w in [0, 10]
+    for b, i, j in itertools.product([2, 3], repeat=3)]
+  for dtype in float_dtypes for strides in [(1, 1)] #, (2, 1)
+  for padding in [((1, 2), (2, 0)), ((10, 8), (7, 13))]
+  for lhs_dilation, rhs_dilation in itertools.product(
+    [(1, 1)], repeat=2) # , (1, 2), (1, 4)
+  for rng_factory in [jtu.rand_default]
+  for dimension_numbers, perms in [
+    (("NCHW", "OIHW", "NCHW"), ([0, 1, 2, 3], [0, 1, 2, 3])),
+    (("NHWC", "HWIO", "NHWC"), ([0, 2, 3, 1], [2, 3, 1, 0])),
+    (("NCHW", "HWIO", "NHWC"), ([0, 1, 2, 3], [2, 3, 1, 0])),
+  ]])
+def test_conv_general_dilated(lhs_shape, rhs_shape, dtype, strides,
+                              padding, lhs_dilation, rhs_dilation,
+                              feature_group_count, batch_group_count,
+                              dimension_numbers, perms, rng_factory):
+  rng = rng_factory(np.random)
+  lhs_perm, rhs_perm = perms  # permute to compatible shapes
+  args = [lax.transpose(rng(lhs_shape, dtype), lhs_perm),
+          lax.transpose(rng(rhs_shape, dtype), rhs_perm)]
+  def fun(lhs, rhs):
+    return lax.conv_general_dilated(
+      lhs, rhs, strides, padding, lhs_dilation, rhs_dilation,
+      dimension_numbers, feature_group_count=feature_group_count,
+      batch_group_count=batch_group_count)
+  tu.check_lazy_fun(fun, *args, rtol=.005, atol=.1)
+
+def test_conv_lhs_count():
+  lhs_shape = (1, 1, 3, 7)
+  rhs_shape = (1, 1, 2, 3)
+  expected = [[[
+    [1, 2, 3, 3, 3, 2, 1],
+    [2, 4, 6, 6, 6, 4, 2],
+    [1, 2, 3, 3, 3, 2, 1]
+  ]]]
+  actual = valid_conv_lhs_count((0, 0, 0, 0), lhs_shape, lhs_shape, rhs_shape)
+  np.testing.assert_array_equal(expected, actual)
+  expected_slice = [[[[6, 4],
+                      [3, 2]]]]
+  slice = valid_conv_lhs_count((0, 0, 1, 4), (1, 1, 2, 2), lhs_shape, rhs_shape)
+  np.testing.assert_array_equal(expected_slice, slice)
 
 def test_custom_jvp():
   @custom_jvp
