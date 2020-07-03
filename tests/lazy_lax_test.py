@@ -336,11 +336,11 @@ def test_pad(shape, dtype, padding_config, rng_factory):
 def test_custom_jvp():
   @custom_jvp
   def f(x):
-    retun x ** 2
+    return x ** 2
 
   f.defjvp(lambda x: 2 * x)
   rng = jtu.rand_small(np.random)
-  tu.check_lazy_fun(f, rng((1,), float))
+  tu.check_lazy_fun(f, rng((1,), 'float32'))
 
 def test_jit():
   rng = jtu.rand_small(np.random)
