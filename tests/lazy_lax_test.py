@@ -5,7 +5,7 @@ from functools import partial
 import pytest
 import numpy as np
 
-from jax import dtypes, jit
+from jax import dtypes, jit, custom_jvp
 import jax.test_util as jtu
 from jax import lax
 
@@ -332,6 +332,15 @@ def test_pad(shape, dtype, padding_config, rng_factory):
   args = [rng(shape, dtype), rng((), dtype)]
   op = lambda *args: lax.pad(*args, padding_config)
   tu.check_lazy_fun(op, *args)
+
+def test_custom_jvp():
+  @custom_jvp
+  def f(x):
+    retun x ** 2
+
+  f.defjvp(lambda x: 2 * x)
+  rng = jtu.rand_small(np.random)
+  tu.check_lazy_fun(f, rng((1,), float))
 
 def test_jit():
   rng = jtu.rand_small(np.random)

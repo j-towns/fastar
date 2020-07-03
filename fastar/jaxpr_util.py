@@ -3,7 +3,7 @@ import numpy as np
 
 from jax import linear_util as lu
 from jax.tree_util import tree_unflatten, tree_flatten
-from jax.util import safe_map, unzip2
+from jax.util import safe_map, safe_zip, unzip2
 from jax.core import Literal, Jaxpr, JaxprEqn, Var, TypedJaxpr
 from jax import tree_util
 from jax.interpreters import xla
@@ -19,6 +19,7 @@ from jax import tree_util
 
 
 map = safe_map
+zip = safe_zip
 
 class InfShapeError(Exception): pass
 
@@ -104,40 +105,16 @@ abstract_arrays._DIMENSION_TYPES.add(InfType)
 inf = InfType()
 _neginf = InfType(neg=True)
 
-class NoJitStagingJaxprTrace(pe.StagingJaxprTrace):
-  def process_call(self, primitive, f: lu.WrappedFun, tracers, params):
-    return f.call_wrapped(*tracers)
-
-@lu.transformation
-def trace_to_subjaxpr_nojit(master: jc.MasterTrace,
-                            pvals: Sequence[pe.PartialVal]):
-  assert all([isinstance(pv, pe.PartialVal) for pv in pvals]), pvals
-  trace = NoJitStagingJaxprTrace(master, jc.cur_sublevel())
-  in_tracers = map(trace.new_arg, pvals)
-  ans = yield in_tracers, {}
-  out_tracers = map(trace.full_raise, map(jc.full_lower, ans))
-  out_tracers = map(partial(pe.instantiate_const_at, trace), [True] * len(ans), out_tracers)
-  jaxpr, consts, env = pe.tracers_to_jaxpr(in_tracers, out_tracers)
-  out_pvals = [t.pval for t in out_tracers]
-  del trace, in_tracers, out_tracers
-  yield jaxpr, (out_pvals, consts, env)
-
-def trace_to_jaxpr_nojit(flat_fun, in_pvals):
-  with jc.new_master(NoJitStagingJaxprTrace) as master:
-    fun = trace_to_subjaxpr_nojit(flat_fun, master)
-    jaxpr, (out_pvals, consts, env) = fun.call_wrapped(in_pvals)
-    assert not env
-    del master
-  return jaxpr, out_pvals, consts
-
 def fastar_jaxpr(flat_fun, *args_flat):
   def abstractify(x):
     return ShapedArray(np.shape(x), dtypes.result_type(x))
   in_avals = map(abstractify, args_flat)
   in_pvals = map(pe.PartialVal.unknown, in_avals)
-  jaxpr, out_pvals, consts = trace_to_jaxpr_nojit(flat_fun, in_pvals)
+  jaxpr, out_pvals, consts = pe.trace_to_jaxpr(
+      flat_fun, in_pvals, instantiate=True, stage_out=True)
   out_avals = [v.get_aval() for v in out_pvals]
-  return TypedJaxpr(submerge_consts(jaxpr, consts), [], in_avals, out_avals)
+  return TypedJaxpr(refresh_names(inline_calls(submerge_consts(jaxpr, consts))),
+                    [], in_avals, out_avals)
 
 def tie_the_knot(typed_jaxpr):
   jaxpr, _, in_avals, out_avals = typed_jaxpr
@@ -174,6 +151,51 @@ class Literal_(Literal):
   def __repr__(self):
     return '{}'.format(self.val)
 
+def inline_calls(jaxpr):
+  new_eqns = []
+
+  def inline_call(jaxpr, invars, outvars):
+    inmap = dict(zip(jaxpr.invars, invars))
+    outmap = dict(zip(jaxpr.outvars, outvars))
+    for eqn in jaxpr.eqns:
+      new_invars = [v if isinstance(v, Literal) else inmap.get(v, v)
+                    for v in eqn.invars]
+      new_outvars = [outmap.get(v, v) for v in eqn.outvars]
+      call_jaxpr, params = jc.extract_call_jaxpr(eqn.primitive, eqn.params)
+      if call_jaxpr:
+        if not eqn.primitive in {jc.call_p, xla.xla_call_p}:
+          raise NotImplementedError
+        inline_call(call_jaxpr, new_invars, new_outvars)
+      else:
+        new_eqns.append(
+            JaxprEqn(new_invars, new_outvars, eqn.primitive, eqn.params,
+                     eqn.source_info))
+
+  for eqn in jaxpr.eqns:
+    call_jaxpr, params = jc.extract_call_jaxpr(eqn.primitive, eqn.params)
+    if call_jaxpr:
+      if not eqn.primitive in {jc.call_p, xla.xla_call_p}:
+        raise NotImplementedError
+      inline_call(call_jaxpr, eqn.invars, eqn.outvars)
+    else:
+      new_eqns.append(eqn)
+
+  return Jaxpr(jaxpr.constvars, jaxpr.invars, jaxpr.outvars, new_eqns)
+
+def refresh_names(jaxpr):
+  vs = {}
+  g = jc.gensym()
+  varmap = lambda v: vs[v] if v in vs else vs.setdefault(v, g(v.aval))
+  jaxpr_constvars = map(varmap, jaxpr.constvars)
+  jaxpr_invars = map(varmap, jaxpr.invars)
+  new_eqns = []
+  for eqn in jaxpr.eqns:
+    invars = [v if isinstance(v, Literal) else varmap(v) for v in eqn.invars]
+    outvars = map(varmap, eqn.outvars)
+    new_eqns.append(
+        JaxprEqn(invars, outvars, eqn.primitive, eqn.params, eqn.source_info))
+  jaxpr_outvars = map(varmap, jaxpr.outvars)
+  return Jaxpr(jaxpr_constvars, jaxpr_invars, jaxpr_outvars, new_eqns)
 
 def submerge_consts(jaxpr, consts, invals=None):
   """

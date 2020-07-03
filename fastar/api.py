@@ -24,6 +24,7 @@ def lazy_eval_fixed_point(fun, mock_arg):
     flat_fun, out_tree = flatten_fun_nokwargs(f, in_tree)
     jaxpr, consts, _, out_avals = tie_the_knot(
         fastar_jaxpr(flat_fun, *arg_flat))
+    print(jaxpr)
     outs_flat = core.lazy_eval_jaxpr(jaxpr, consts)
     for out, aval in zip(outs_flat, out_avals):
       assert core.get_aval(out) == aval
