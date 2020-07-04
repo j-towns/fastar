@@ -1,7 +1,5 @@
-from functools import partial
-
 import numpy as np
-from jax import lax, numpy as jnp
+from jax import numpy as jnp, lax, lax_reference as laxref
 from jax.util import safe_map, safe_zip, curry, unzip2, prod, unzip3
 
 from fastar.core import dependency_rules
@@ -223,27 +221,43 @@ dependency_rules[lax.dot_general_p] = dot_general_dependency_rule
 def pad_dependency_rule(outbox, operand, padding_value, padding_config, allow_empty_slices=False):
   outstart, outshape = outbox
   lo, _, interior = unzip3(padding_config)
+  if np.any(np.less(lo, 0)):
+    raise NotImplementedError("Negative padding not yet supported.")
   dilation = np.array(interior) + 1
   outstart = np.array(outstart)
   inclip = lambda indices: np.clip(indices, 0, operand.shape)
-  lo_sign = np.where(np.less(lo, 0), -1, 1)
-  instart = inclip(lo_sign * np.floor_divide(lo_sign * (outstart - lo), dilation))
+  instart = inclip(lax.lax._ceil_divide(outstart - lo, dilation))
   instop = inclip(lax.lax._ceil_divide(outstart + outshape - lo, dilation))
   inshape = instop - instart
+  def outslice(inslice, padding_value):
+    assert inslice is None or np.array_equal(inslice.shape, inshape)
+    if prod(inshape) == 0:
+      return jnp.full(outshape, padding_value)
+    offset = instart * dilation + lo - outstart
+    limit = offset + np.maximum(0, (np.array(inshape) - 1) * dilation + 1)
+    return lax.pad(inslice, padding_value, zip(offset, np.array(outshape) - limit, interior))
   insize = prod(inshape)
   padcount = prod(outshape) - insize
-  def outslice(inslice, padding_value):
-    if inslice is None:
-      return jnp.full(outshape, padding_value)
-    next_instart = inclip(lax.lax._ceil_divide(outstart - lo, dilation))
-    next_outstart = next_instart * dilation + lo
-    _lo = next_outstart - outstart
-    _hi = np.array(outshape) - (_lo + (jnp.array(inslice.shape) - 1) * dilation + 1)
-    return lax.pad(inslice, padding_value, zip(_lo, _hi, interior))
   return ([instart if insize or allow_empty_slices else None, ()],
           [np.ones(inshape, int) if insize or allow_empty_slices else None, padcount], outslice)
 
 dependency_rules[lax.pad_p] = pad_dependency_rule
+
+def pad_incount_from_outcount(outstart, outcount, inshape, operand, padding_value, padding_config):
+  if prod(inshape) == 0:
+    return np.empty(inshape, operand.dtype)
+  outstart = np.array(outstart)
+  lo, _, interior = unzip3(padding_config)
+  if np.any(np.less(lo, 0)):
+    raise NotImplementedError("Negative padding not yet supported.")
+  dilation = np.array(interior) + 1
+  inclip = lambda indices: np.clip(indices, 0, operand.shape)
+  instart = inclip(lax.lax._ceil_divide(outstart - lo, dilation))
+  offset = lo + instart * dilation - outstart
+  limit = offset + np.maximum(0, (np.array(inshape) - 1) * dilation + 1)
+  incount = lax.slice(outcount, offset, limit, dilation)
+  assert incount.shape == inshape
+  return incount
 
 def conv_lhs_count(instart, inshape, lhs_shape, rhs_shape, window_strides):
   single_dim_counts = []
@@ -276,19 +290,16 @@ def conv_dependency_rule(outbox, lhs, rhs, window_strides, precision):
   full_rhs_channels = list(rhs.shape[1:])
   rhs_start = [outchannel_start] + [0] * len(full_rhs_channels)
   rhs_shape = [outchannel_shape] + full_rhs_channels
-  def outslice(lhs_slice, rhs_slice):
-    return lax.conv(lhs_slice, rhs_slice, window_strides, 'VALID', precision)
   return ((lhs_start, rhs_start),
           (conv_lhs_count(lhs_start, lhs_shape, lhs.shape, rhs.shape, window_strides),
-           np.ones(rhs_shape, int)), outslice)
+           np.ones(rhs_shape, int)), lambda lhs_slice, rhs_slice:
+          lax.conv(lhs_slice, rhs_slice, window_strides, 'VALID', precision))
 
 def conv_general_dilated_dependency_rule(
     outbox, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
     dimension_numbers, feature_group_count, batch_group_count, precision, **_):
   if feature_group_count > 1 or batch_group_count > 1:
     raise NotImplementedError("Feature and batch groups are not implemented.")
-  if np.any(np.not_equal(lhs_dilation, 1)):
-    raise NotImplementedError("Transposed convs are not yet implemented.")
   if np.any(np.not_equal(rhs_dilation, 1)):
     raise NotImplementedError("Dilated convs are not yet implemented.")
   _, outshape = outbox
@@ -297,30 +308,26 @@ def conv_general_dilated_dependency_rule(
   lhs_transpose = lambda lhs: lax.transpose(lhs, lhs_spec)
   rhs_transpose = lambda rhs: lax.transpose(rhs, rhs_spec)
   # evaluations on abstract inputs to retrieve shapes:
-  transposed_lhs = lhs_transpose(lhs)
-  transposed_rhs = rhs_transpose(rhs)
+  lhs = lhs_transpose(lhs)
+  rhs = rhs_transpose(rhs)
   padding_value = np.zeros((), lhs.dtype)
-  padding_args = transposed_lhs, padding_value, [(0, 0, 0)] * 2 + [(lo, hi, 0) for lo, hi in padding]
-  padded_lhs = lax.pad(*padding_args)
-
+  pad_args = (lhs, padding_value, [(0, 0, 0)] * 2 + [
+    (lo, hi, dil - 1) for (lo, hi), dil in zip(padding, lhs_dilation)])
+  padded_lhs = lax.pad(*pad_args)
   (outstart,), (outcount,), out_transpose = transpose_dependency_rule(outbox, None, np.argsort(out_spec))
-  (padded_lhs_start, transposed_rhs_start), (padded_lhs_count, transposed_rhs_count), conv = conv_dependency_rule(
-    (outstart, outcount.shape), padded_lhs, transposed_rhs, window_strides, precision)
-  (transposed_lhs_start, _), (transposed_lhs_count, _), lhs_pad = pad_dependency_rule(
-    (padded_lhs_start, padded_lhs_count.shape), *padding_args, allow_empty_slices=True)
-  start_below_lo = np.array([lo for lo, hi in padding]) - padded_lhs_start[2:]
-  start = np.concatenate([[0, 0], np.clip(start_below_lo, 0, padded_lhs_count.shape[2:])])
+  (padded_lhs_start, rhs_start), (padded_lhs_count, rhs_count), conv = conv_dependency_rule(
+    (outstart, outcount.shape), padded_lhs, rhs, window_strides, precision)
+  (lhs_start, _), (lhs_count, _), lhs_pad = pad_dependency_rule(
+    (padded_lhs_start, padded_lhs_count.shape), *pad_args, allow_empty_slices=True)
+  lhs_count = pad_incount_from_outcount(padded_lhs_start, padded_lhs_count, lhs_count.shape, *pad_args)
   inverse_lhs_perm = np.argsort(lhs_spec)
   inverse_rhs_perm = np.argsort(rhs_spec)
-  lhs_start = np.take(transposed_lhs_start, inverse_lhs_perm)
-  lhs_count = lax.transpose(lax.slice(
-    padded_lhs_count, start, start + transposed_lhs_count.shape,
-    np.ones_like(start)), inverse_lhs_perm)
-  rhs_start = np.take(transposed_rhs_start, inverse_rhs_perm)
-  rhs_count = lax.transpose(transposed_rhs_count, inverse_rhs_perm)
-  def outslice(lhs_slice, rhs_slice):
-    return out_transpose(conv(lhs_pad(
-      lhs_transpose(lhs_slice), padding_value), rhs_transpose(rhs_slice)))
-  return ((lhs_start, rhs_start), (lhs_count, rhs_count), outslice)
+  return ((np.take(lhs_start, inverse_lhs_perm),
+           np.take(rhs_start, inverse_rhs_perm)),
+          (lax.transpose(lhs_count, inverse_lhs_perm),
+           lax.transpose(rhs_count, inverse_rhs_perm)),
+          lambda lhs_slice, rhs_slice: out_transpose(conv(
+            lhs_pad(lhs_transpose(lhs_slice), padding_value),
+            rhs_transpose(rhs_slice))))
 
 dependency_rules[lax.conv_general_dilated_p] = conv_general_dilated_dependency_rule
