@@ -10,7 +10,7 @@ import jax.test_util as jtu
 from jax import lax
 
 import fastar.test_util as tu
-from fastar.rules import valid_conv_lhs_count
+from fastar.rules import conv_lhs_count
 
 # This is borrowed from lax_tests.py in the JAX tests directory.
 # TODO import directly from lax_tests.py
@@ -341,7 +341,7 @@ def test_pad(shape, dtype, padding_config, rng_factory):
      ((b, i, 9, 10), (j, i, 4, 5))
      for b, i, j in itertools.product([2, 3], repeat=3)]
    for dtype in float_dtypes
-   for strides in [(1, 1), ] # TODO (1, 2), (2, 1)
+   for strides in [(1, 1), (1, 2), (2, 1)]
    for padding in ["VALID", "SAME"]
    for rng_factory in [jtu.rand_small]])
 def test_conv(lhs_shape, rhs_shape, dtype, strides, padding, rng_factory):
@@ -361,7 +361,7 @@ def test_conv(lhs_shape, rhs_shape, dtype, strides, padding, rng_factory):
      (j * feature_group_count * batch_group_count, i, 4, 5))
     for w in [0, 10]
     for b, i, j in itertools.product([2, 3], repeat=3)]
-  for dtype in float_dtypes for strides in [(1, 1)] #, (2, 1)
+  for dtype in float_dtypes for strides in [(1, 1), (2, 1)]
   for padding in [((1, 2), (2, 0)), ((10, 8), (7, 13))]
   for lhs_dilation, rhs_dilation in itertools.product(
     [(1, 1)], repeat=2) # , (1, 2), (1, 4)
@@ -394,12 +394,21 @@ def test_conv_lhs_count():
     [2, 4, 6, 6, 6, 4, 2],
     [1, 2, 3, 3, 3, 2, 1]
   ]]]
-  actual = valid_conv_lhs_count((0, 0, 0, 0), lhs_shape, lhs_shape, rhs_shape)
+  actual = conv_lhs_count((0, 0, 0, 0), lhs_shape, lhs_shape, rhs_shape, (1, 1))
   np.testing.assert_array_equal(expected, actual)
   expected_slice = [[[[6, 4],
                       [3, 2]]]]
-  slice = valid_conv_lhs_count((0, 0, 1, 4), (1, 1, 2, 2), lhs_shape, rhs_shape)
+  slice = conv_lhs_count((0, 0, 1, 4), (1, 1, 2, 2), lhs_shape, rhs_shape, (1, 1))
   np.testing.assert_array_equal(expected_slice, slice)
+
+def test_conv_lhs_count_strided():
+  lhs_shape = (1, 1, 21)
+  rhs_shape = (1, 1, 7)
+  expected = [[[1, 1, 1, 2, 2, 2, 3, 2, 2, 3, 2, 2, 3, 2, 2, 2, 1, 1, 1, 0, 0]]]
+  actual = conv_lhs_count((0, 0, 0), lhs_shape, lhs_shape, rhs_shape, (3,))
+  np.testing.assert_array_equal(expected, actual)
+  slice = conv_lhs_count((0, 0, 2), (1, 1, 5), lhs_shape, rhs_shape, (3,))
+  np.testing.assert_array_equal([[[1, 2, 2, 2, 3]]], slice)
 
 def test_custom_jvp():
   @custom_jvp

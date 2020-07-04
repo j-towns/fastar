@@ -245,31 +245,42 @@ def pad_dependency_rule(outbox, operand, padding_value, padding_config, allow_em
 
 dependency_rules[lax.pad_p] = pad_dependency_rule
 
-def valid_conv_lhs_count(instart, inshape, lhs_shape, rhs_shape):
-  ranges = [np.arange(1, l + 1) for l in lhs_shape[2:]]
-  single_dim_counts = [np.minimum(np.minimum(lrange, lrange[::-1]), r)
-           for lrange, r in zip(ranges, rhs_shape[2:])]
-  single_dim_count_slices = [side[start: start + size]
-           for side, start, size in zip(single_dim_counts, instart[2:], inshape[2:])]
+def conv_lhs_count(instart, inshape, lhs_shape, rhs_shape, window_strides):
+  single_dim_counts = []
+  for size, rsize, stride in zip(lhs_shape[2:], rhs_shape[2:], window_strides):
+    strides_per_tile = lax.lax._ceil_divide(rsize, stride)
+    lo = np.arange(strides_per_tile) * stride
+    tile_size = strides_per_tile * stride
+    tile_counts = np.floor_divide(size - lo + (tile_size - rsize), tile_size)
+    tile = np.concatenate([np.ones(rsize, int), np.zeros(tile_size - rsize, int)])
+    hi = size - lo - tile_size * tile_counts
+    counts = [lax.pad(np.tile(tile, (tile_count,)), 0, ((lo, hi, 0),))
+              for lo, hi, tile_count in zip(lo, hi, tile_counts)]
+    single_dim_counts.append(np.sum(counts, axis=0))
+
+  single_dim_count_slices = [
+    side[start: start + size]
+    for side, start, size in zip(single_dim_counts, instart[2:], inshape[2:])]
+
   count = single_dim_count_slices[0]
   for s in single_dim_count_slices[1:]:
     count = np.outer(count, s)
   return np.broadcast_to(count, inshape)
 
-def valid_conv_dependency_rule(outbox, lhs, rhs, precision):
+def conv_dependency_rule(outbox, lhs, rhs, window_strides, precision):
   outstart, outshape = outbox
   batch_start, outchannel_start, *spatial_outstart = outstart
   batch_shape, outchannel_shape, *spatial_outshape = outshape
-  lhs_instart = [batch_start, 0] + spatial_outstart
-  lhs_inshape = [batch_shape, lhs.shape[1]] + list(np.add(spatial_outshape, rhs.shape[2:]) - 1)
+  lhs_start = [batch_start, 0] + list(np.array(spatial_outstart) * window_strides)
+  lhs_shape = [batch_shape, lhs.shape[1]] + list(np.subtract(spatial_outshape, 1) * window_strides + rhs.shape[2:])
   full_rhs_channels = list(rhs.shape[1:])
-  rhs_instart = [outchannel_start] + [0] * len(full_rhs_channels)
-  rhs_inshape = [outchannel_shape] + full_rhs_channels
+  rhs_start = [outchannel_start] + [0] * len(full_rhs_channels)
+  rhs_shape = [outchannel_shape] + full_rhs_channels
   def outslice(lhs_slice, rhs_slice):
-    return lax.conv(lhs_slice, rhs_slice, [1] * len(spatial_outshape), 'VALID', precision)
-  return ((lhs_instart, rhs_instart),
-          (valid_conv_lhs_count(lhs_instart, lhs_inshape, lhs.shape, rhs.shape),
-           np.ones(rhs_inshape, int)), outslice)
+    return lax.conv(lhs_slice, rhs_slice, window_strides, 'VALID', precision)
+  return ((lhs_start, rhs_start),
+          (conv_lhs_count(lhs_start, lhs_shape, lhs.shape, rhs.shape, window_strides),
+           np.ones(rhs_shape, int)), outslice)
 
 def conv_general_dilated_dependency_rule(
     outbox, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
@@ -280,8 +291,6 @@ def conv_general_dilated_dependency_rule(
     raise NotImplementedError("Transposed convs are not yet implemented.")
   if np.any(np.not_equal(rhs_dilation, 1)):
     raise NotImplementedError("Dilated convs are not yet implemented.")
-  if np.any(np.not_equal(window_strides, 1)):
-    raise NotImplementedError("Strided convs are not yet implemented.")
   _, outshape = outbox
 
   lhs_spec, rhs_spec, out_spec = dimension_numbers
@@ -295,8 +304,8 @@ def conv_general_dilated_dependency_rule(
   padded_lhs = lax.pad(*padding_args)
 
   (outstart,), (outcount,), out_transpose = transpose_dependency_rule(outbox, None, np.argsort(out_spec))
-  (padded_lhs_start, transposed_rhs_start), (padded_lhs_count, transposed_rhs_count), conv = valid_conv_dependency_rule(
-    (outstart, outcount.shape), padded_lhs, transposed_rhs, precision)
+  (padded_lhs_start, transposed_rhs_start), (padded_lhs_count, transposed_rhs_count), conv = conv_dependency_rule(
+    (outstart, outcount.shape), padded_lhs, transposed_rhs, window_strides, precision)
   (transposed_lhs_start, _), (transposed_lhs_count, _), lhs_pad = pad_dependency_rule(
     (padded_lhs_start, padded_lhs_count.shape), *padding_args, allow_empty_slices=True)
   start_below_lo = np.array([lo for lo, hi in padding]) - padded_lhs_start[2:]
@@ -310,7 +319,8 @@ def conv_general_dilated_dependency_rule(
   rhs_start = np.take(transposed_rhs_start, inverse_rhs_perm)
   rhs_count = lax.transpose(transposed_rhs_count, inverse_rhs_perm)
   def outslice(lhs_slice, rhs_slice):
-    return out_transpose(conv(lhs_pad(lhs_transpose(lhs_slice), padding_value), rhs_transpose(rhs_slice)))
+    return out_transpose(conv(lhs_pad(
+      lhs_transpose(lhs_slice), padding_value), rhs_transpose(rhs_slice)))
   return ((lhs_start, rhs_start), (lhs_count, rhs_count), outslice)
 
 dependency_rules[lax.conv_general_dilated_p] = conv_general_dilated_dependency_rule
