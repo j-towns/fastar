@@ -221,19 +221,17 @@ dependency_rules[lax.dot_general_p] = dot_general_dependency_rule
 def pad_dependency_rule(outbox, operand, padding_value, padding_config, allow_empty_slices=False):
   outstart, outshape = outbox
   lo, _, interior = unzip3(padding_config)
-  if np.any(np.less(lo, 0)):
-    raise NotImplementedError("Negative padding not yet supported.")
   dilation = np.array(interior) + 1
-  outstart = np.array(outstart)
+  outstart_lo = np.subtract(outstart, lo)
   inclip = lambda indices: np.clip(indices, 0, operand.shape)
-  instart = inclip(lax.lax._ceil_divide(outstart - lo, dilation))
-  instop = inclip(lax.lax._ceil_divide(outstart + outshape - lo, dilation))
+  instart = inclip(lax.lax._ceil_divide(outstart_lo, dilation))
+  instop = inclip(lax.lax._ceil_divide(outstart_lo + outshape, dilation))
   inshape = instop - instart
   def outslice(inslice, padding_value):
     assert inslice is None or np.array_equal(inslice.shape, inshape)
     if prod(inshape) == 0:
       return jnp.full(outshape, padding_value)
-    offset = instart * dilation + lo - outstart
+    offset = instart * dilation - outstart_lo
     limit = offset + np.maximum(0, (np.array(inshape) - 1) * dilation + 1)
     return lax.pad(inslice, padding_value, zip(offset, np.array(outshape) - limit, interior))
   insize = prod(inshape)
@@ -246,14 +244,12 @@ dependency_rules[lax.pad_p] = pad_dependency_rule
 def pad_incount_from_outcount(outstart, outcount, inshape, operand, padding_value, padding_config):
   if prod(inshape) == 0:
     return np.empty(inshape, operand.dtype)
-  outstart = np.array(outstart)
   lo, _, interior = unzip3(padding_config)
-  if np.any(np.less(lo, 0)):
-    raise NotImplementedError("Negative padding not yet supported.")
+  outstart_lo = np.subtract(outstart, lo)
   dilation = np.array(interior) + 1
   inclip = lambda indices: np.clip(indices, 0, operand.shape)
-  instart = inclip(lax.lax._ceil_divide(outstart - lo, dilation))
-  offset = lo + instart * dilation - outstart
+  instart = inclip(lax.lax._ceil_divide(outstart_lo, dilation))
+  offset = instart * dilation - outstart_lo
   limit = offset + np.maximum(0, (np.array(inshape) - 1) * dilation + 1)
   incount = laxref.slice(outcount, offset, limit, dilation)
   assert incount.shape == inshape

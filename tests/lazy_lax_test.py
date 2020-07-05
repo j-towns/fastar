@@ -325,8 +325,8 @@ def test_broadcast_in_dim(inshape, dtype, outshape, dimensions, rng_factory):
      [(0, 0, 0), (0, 0, 0)],  # no padding
      [(1, 1, 0), (2, 2, 0)],  # only positive edge padding
      [(1, 2, 1), (0, 1, 0)],  # edge padding and interior padding
-     # TODO [(0, 0, 0), (-1, -1, 0)],  # negative padding
-     # TODO [(0, 0, 0), (-2, -2, 4)],  # negative padding and interior padding
+     [(0, 0, 0), (-1, -1, 0)],  # negative padding
+     [(0, 0, 0), (-2, -2, 4)],  # negative padding and interior padding
      [(0, 0, 0), (-2, -3, 1)],  # remove everything in one dimension
    ]
    for dtype in default_dtypes])
@@ -387,7 +387,7 @@ def test_conv_general_dilated(lhs_shape, rhs_shape, dtype, strides,
       lhs, rhs, strides, padding, lhs_dilation, rhs_dilation,
       dimension_numbers, feature_group_count=feature_group_count,
       batch_group_count=batch_group_count)
-  tu.check_lazy_fun(fun, *args, rtol=.005, atol=.1)
+  tu.check_lazy_fun(fun, *args, rtol=.005, atol=.2)
 
 def test_conv_lhs_count():
   lhs_shape = (1, 1, 3, 7)
