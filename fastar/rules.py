@@ -255,7 +255,7 @@ def pad_incount_from_outcount(outstart, outcount, inshape, operand, padding_valu
   instart = inclip(lax.lax._ceil_divide(outstart - lo, dilation))
   offset = lo + instart * dilation - outstart
   limit = offset + np.maximum(0, (np.array(inshape) - 1) * dilation + 1)
-  incount = lax.slice(outcount, offset, limit, dilation)
+  incount = laxref.slice(outcount, offset, limit, dilation)
   assert incount.shape == inshape
   return incount
 
@@ -268,7 +268,7 @@ def conv_lhs_count(instart, inshape, lhs_shape, rhs_shape, window_strides):
     tile_counts = np.floor_divide(size - lo + (tile_size - rsize), tile_size)
     tile = np.concatenate([np.ones(rsize, int), np.zeros(tile_size - rsize, int)])
     hi = size - lo - tile_size * tile_counts
-    counts = [lax.pad(np.tile(tile, (tile_count,)), 0, ((lo, hi, 0),))
+    counts = [laxref.pad(np.tile(tile, (tile_count,)), 0, ((lo, hi, 0),))
               for lo, hi, tile_count in zip(lo, hi, tile_counts)]
     single_dim_counts.append(np.sum(counts, axis=0))
 
@@ -324,8 +324,8 @@ def conv_general_dilated_dependency_rule(
   inverse_rhs_perm = np.argsort(rhs_spec)
   return ((np.take(lhs_start, inverse_lhs_perm),
            np.take(rhs_start, inverse_rhs_perm)),
-          (lax.transpose(lhs_count, inverse_lhs_perm),
-           lax.transpose(rhs_count, inverse_rhs_perm)),
+          (laxref.transpose(lhs_count, inverse_lhs_perm),
+           laxref.transpose(rhs_count, inverse_rhs_perm)),
           lambda lhs_slice, rhs_slice: out_transpose(conv(
             lhs_pad(lhs_transpose(lhs_slice), padding_value),
             rhs_transpose(rhs_slice))))
