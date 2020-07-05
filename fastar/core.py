@@ -2,13 +2,12 @@ from typing import Callable, List
 
 import jax.numpy as jnp
 import jax.core as jc
-from jax.interpreters.xla import abstractify
 from jax.util import safe_map, safe_zip
 from jax import lax
 from fastar.box_util import (
   box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
   circular_add, circular_get)
-from fastar.jaxpr_util import Literal_, inf
+from fastar.jaxpr_util import Literal_, inf, abstractify
 import numpy as np
 
 
@@ -22,9 +21,6 @@ KNOWN = 1
 CACHE_SIZE = 128
 
 dependency_rules = {}
-
-def abstractify_lazy(invals):
-  return [abstractify(v.cache) if isinstance(v, LazyArray) else v for v in invals]
 
 class LazyError(Exception): pass
 
@@ -230,7 +226,7 @@ def lazy_eval_jaxpr(jaxpr, consts, *args):
   return map(read, jaxpr.outvars)
 
 def get_aval(x):
-  if isinstance(x, LazyArray):
-    return x._aval
-  else:
-    return jc.get_aval(x)
+  return x._aval if isinstance(x, LazyArray) else jc.get_aval(x)
+
+def abstractify_lazy(invals):
+  return [abstractify(x._aval) if isinstance(x, LazyArray) else x for x in invals]

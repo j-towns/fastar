@@ -211,8 +211,8 @@ def dot_general_dependency_rule(outbox, lhs, rhs, dimension_numbers, precision):
   (lhs_start,), (lhs_incount,), _ = reduce_dependency_rule(None)(lhs_outbox, lhs, axes=lhs_contracting)
   rhs_outbox = unzip2([outslices[d] for d in list(rhs_batch) + rhs_other_out_dims])
   (rhs_start,), (rhs_incount,), _ = reduce_dependency_rule(None)(rhs_outbox, rhs, axes=rhs_contracting)
-  incounts =  [lhs_incount * prod([out_shape[d] for d in rhs_other_out_dims]),
-               rhs_incount * prod([out_shape[d] for d in lhs_other_out_dims])]
+  incounts = [lhs_incount * prod([out_shape[d] for d in rhs_other_out_dims]),
+              rhs_incount * prod([out_shape[d] for d in lhs_other_out_dims])]
   return ([lhs_start, rhs_start], incounts,
           lambda *inslices: lax.dot_general(*inslices, dimension_numbers, precision))
 
@@ -255,6 +255,9 @@ def pad_incount_from_outcount(outstart, outcount, inshape, operand, padding_valu
   assert incount.shape == inshape
   return incount
 
+def outer_product(vectors):
+  return np.einsum(*(x for (i, vector) in enumerate(vectors) for x in (vector, [i])))
+
 def conv_lhs_count(instart, inshape, lhs_shape, rhs_shape, window_strides):
   single_dim_counts = []
   for size, rsize, stride in zip(lhs_shape[2:], rhs_shape[2:], window_strides):
@@ -271,11 +274,7 @@ def conv_lhs_count(instart, inshape, lhs_shape, rhs_shape, window_strides):
   single_dim_count_slices = [
     side[start: start + size]
     for side, start, size in zip(single_dim_counts, instart[2:], inshape[2:])]
-
-  count = single_dim_count_slices[0]
-  for s in single_dim_count_slices[1:]:
-    count = np.outer(count, s)
-  return np.broadcast_to(count, inshape)
+  return np.broadcast_to(outer_product(single_dim_count_slices), inshape)
 
 def conv_dependency_rule(outbox, lhs, rhs, window_strides, precision):
   outstart, outshape = outbox
