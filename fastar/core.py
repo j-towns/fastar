@@ -241,6 +241,9 @@ class Ones:
   ndim = property(lambda self: len(self.shape))
   size = property(lambda self: np.prod(self.shape, dtype=int))
 
+  def __eq__(self, other):
+    return is_ones(other) and self.shape == other.shape
+
 def is_ones(count: Union[Array, Ones]):
   return type(count) is Ones
 
