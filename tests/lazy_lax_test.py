@@ -431,6 +431,19 @@ def test_pad_incount_from_outcount(outstart, outcount, inshape, expected):
   assert inshape == incount_.shape
   assert outslice(np.ones(inshape, int), 0).shape == outcount.shape
 
+@pytest.mark.parametrize(
+    'pred_shape,arg_shape,arg_dtype,rng_factory',
+    [(pred_shape, arg_shape, arg_dtype, rng_factory)
+     for arg_shape in [(), (3,), (2, 3)]
+     for pred_shape in ([(), arg_shape] if arg_shape else [()])
+     for arg_dtype in default_dtypes
+     for rng_factory in [jtu.rand_default]])
+def test_select(pred_shape, arg_shape, arg_dtype, rng_factory):
+  rng = rng_factory(np.random)
+  args = [rng(pred_shape, np.bool_), rng(arg_shape, arg_dtype),
+          rng(arg_shape, arg_dtype)]
+  return tu.check_lazy_fun(lax.select, *args)
+
 def test_custom_jvp():
   @custom_jvp
   def f(x):
