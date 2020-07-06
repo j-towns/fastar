@@ -197,8 +197,7 @@ def broadcast_in_dim_dependency_rule(
       np.shape(operand), np.take(shape, broadcast_dimensions))
   instart = np.where(is_broadcast, 0, np.take(outstart, broadcast_dimensions))
   inshape = np.where(is_broadcast, 1, np.take(outshape, broadcast_dimensions))
-  incount = np.full(inshape, prod(np.where(
-      is_broadcast, np.take(outshape, broadcast_dimensions), 1)))
+  incount = np.full(inshape, prod(shape) // prod(operand.shape))
   return [instart], [incount], lambda inslice: lax.broadcast_in_dim(
     inslice, outshape, broadcast_dimensions)
 
