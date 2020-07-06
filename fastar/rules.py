@@ -319,12 +319,12 @@ def conv_general_dilated_dependency_rule(
                                         lhs_count.shape, *pad_args, pad_config)
   inverse_lhs_perm = np.argsort(lhs_spec)
   inverse_rhs_perm = np.argsort(rhs_spec)
-  return ((np.take(lhs_start, inverse_lhs_perm),
+  return ((np.take(lhs_start, inverse_lhs_perm) if lhs_count.size else None,
            np.take(rhs_start, inverse_rhs_perm)),
-          (laxref.transpose(lhs_count, inverse_lhs_perm),
+          (laxref.transpose(lhs_count, inverse_lhs_perm) if lhs_count.size else None,
            laxref.transpose(rhs_count, inverse_rhs_perm)),
           lambda lhs_slice, rhs_slice: out_transpose(conv(
-            lhs_pad(lhs_transpose(lhs_slice), np.zeros((), lhs.dtype)),
+            lhs_pad(lhs_transpose(lhs_slice) if lhs_count.size else None, np.zeros((), lhs.dtype)),
             rhs_transpose(rhs_slice))))
 
 dependency_rules[lax.conv_general_dilated_p] = conv_general_dilated_dependency_rule
