@@ -97,7 +97,7 @@ for op in naryops:
   dependency_rules[op] = naryop_dependency_rule(op)
 
 @curry
-def reduce_dependency_rule(prim, outstart, outcount, operand, axes):
+def reduce_dependency_rule(prim, outstart, outcount, operand, axes, **kwargs):
   if not is_ones(outcount):
     raise NotImplementedError
   instart = list(outstart)
@@ -106,7 +106,7 @@ def reduce_dependency_rule(prim, outstart, outcount, operand, axes):
     instart.insert(d, 0)
     inshape.insert(d, operand.shape[d])
   return ([instart], [Ones(inshape)],
-          lambda inslice: prim.bind(inslice, axes=axes))
+          lambda inslice: prim.bind(inslice, axes=axes, **kwargs))
 
 reduce_ops = [
   lax.reduce_sum_p,
@@ -115,6 +115,8 @@ reduce_ops = [
   lax.reduce_min_p,
   lax.reduce_or_p,
   lax.reduce_and_p,
+  lax.argmax_p,
+  lax.argmin_p,
 ]
 
 for op in reduce_ops:

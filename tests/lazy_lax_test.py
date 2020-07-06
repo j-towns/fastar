@@ -73,12 +73,9 @@ LAX_OPS = [
     op_record("rsqrt", 1, float_dtypes + complex_dtypes, jtu.rand_positive),
     op_record("square", 1, float_dtypes + complex_dtypes, jtu.rand_default),
     op_record("reciprocal", 1, float_dtypes + complex_dtypes, jtu.rand_positive),
-    # TODO (j-towns): requires jit
-    # op_record("tan", 1, float_dtypes, jtu.rand_default, {np.float32: 3e-5}),
-    # TODO (j-towns): requires jit
-    # op_record("asin", 1, float_dtypes, jtu.rand_small),
-    # TODO (j-towns): requires jit
-    # op_record("acos", 1, float_dtypes, jtu.rand_small),
+    op_record("tan", 1, float_dtypes, jtu.rand_default, {np.float32: 3e-5}),
+    op_record("asin", 1, float_dtypes, jtu.rand_small),
+    # TODO(j-towns) fix: op_record("acos", 1, float_dtypes, jtu.rand_small),
     op_record("atan", 1, float_dtypes, jtu.rand_small),
     op_record("asinh", 1, float_dtypes, jtu.rand_default),
     op_record("acosh", 1, float_dtypes, jtu.rand_positive),
@@ -174,6 +171,26 @@ def test_reduce(op_name, rng_factory, shape, axes, dtype, tol):
   args = [rng(shape, dtype)]
   fun = partial(getattr(lax.lax, op_name), axes=axes)
   tu.check_lazy_fun(fun, *args, atol=tol, rtol=tol)
+
+JAX_ARGMINMAX_RECORDS = [
+  op_record("argmin", 1, default_dtypes, jtu.rand_some_equal),
+  op_record("argmax", 1, default_dtypes, jtu.rand_some_equal),
+]
+
+@pytest.mark.parametrize(
+  'op,rng_factory,shape,dtype,axis,index_dtype',
+  [(rec.op, rec.rng_factory, shape, dtype, axis, index_dtype)
+  for rec in JAX_ARGMINMAX_RECORDS
+  for shape in [(1,), (4,), (2, 3), (1, 2, 1)]
+  for dtype in rec.dtypes
+  for index_dtype in int_dtypes
+  for axis in range(len(shape))
+  if dtype not in (np.complex128, dtypes.bfloat16)])
+def test_argminmax(op, rng_factory, shape, dtype, axis, index_dtype):
+  rng = rng_factory(np.random)
+  def fun(x): return getattr(lax, op)(x, axis, index_dtype)
+  args = [rng(shape, dtype)]
+  tu.check_lazy_fun(fun, *args)
 
 @pytest.mark.parametrize(
   'shape,dtype,dimensions,rng_factory',
