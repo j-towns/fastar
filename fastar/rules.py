@@ -193,13 +193,12 @@ dependency_rules[lax.rev_p] = rev_dependency_rule
 def broadcast_in_dim_dependency_rule(
     outbox, operand, shape, broadcast_dimensions):
   outstart, outshape = outbox
-  is_broadcast = np.array([
-    d not in broadcast_dimensions or
-    shape[d] != operand.shape[np.argwhere(np.equal(broadcast_dimensions, d)).item()]
-    for d in range(len(outshape))])
-  instart = np.take(outstart, broadcast_dimensions)
-  inshape = np.take(np.where(is_broadcast, 1, outshape), broadcast_dimensions)
-  incount = np.full(inshape, prod(np.where(is_broadcast, outshape, 1)))
+  is_broadcast = np.not_equal(
+      np.shape(operand), np.take(shape, broadcast_dimensions))
+  instart = np.where(is_broadcast, 0, np.take(outstart, broadcast_dimensions))
+  inshape = np.where(is_broadcast, 1, np.take(outshape, broadcast_dimensions))
+  incount = np.full(inshape, prod(np.where(
+      is_broadcast, np.take(outshape, broadcast_dimensions), 1)))
   return [instart], [incount], lambda inslice: lax.broadcast_in_dim(
     inslice, outshape, broadcast_dimensions)
 
