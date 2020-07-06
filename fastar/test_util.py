@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import jax.test_util as jtu
 from jax import vjp
 from jax.util import safe_map, safe_zip
-from jax.tree_util import tree_multimap, tree_flatten
+from jax.tree_util import tree_multimap, tree_flatten, tree_map
 
 from fastar import lazy_eval, lazy_eval_fixed_point, LazyArray
 from fastar import core
@@ -52,8 +52,14 @@ def check_state(arrs):
         _check_state(arr.eqn.invars)
   _check_state(arrs)
 
+def _identity(x):
+  return lax.add(x, jnp.zeros_like(x))
 
-def check_lazy_fun(fun, *args, atol=None, rtol=None):
+def check_lazy_fun(fun_, *args, atol=None, rtol=None):
+  def fun(*args):
+    args = tree_map(_identity, args)
+    return fun_(*args)
+
   out_expected_flat, out_expected_tree = tree_flatten(fun(*args))
   out_flat, out_tree = tree_flatten(lazy_eval(fun, *args))
   assert out_expected_tree == out_tree

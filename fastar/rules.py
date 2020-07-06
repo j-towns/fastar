@@ -9,10 +9,18 @@ from fastar.core import dependency_rules
 map = safe_map
 zip = safe_zip
 
+def tie_in_dependency_rule(outbox, x, y):
+  outstarts, outshape = outbox
+  instarts = [None, outstarts]
+  incounts = [None, np.ones(outshape, int)]
+  return instarts, incounts, lambda x_part, y_part: lax.tie_in(x, y_part)
+
+dependency_rules[lax.tie_in_p] = tie_in_dependency_rule
+
 @curry
 def naryop_dependency_rule(prim, outbox, *operands, **params):
   outstarts, outshape = outbox
-  shapes = [np.array(o.shape) for o in operands]
+  shapes = [np.array(np.shape(o)) for o in operands]
   instarts = [np.where(shape == 1, 0, outstarts) if len(shape) else []
               for shape in shapes]
   incounts = [np.full(np.where(shape == 1, 1, outshape),
@@ -22,6 +30,7 @@ def naryop_dependency_rule(prim, outbox, *operands, **params):
   return instarts, incounts, lambda *inslices: prim.bind(*inslices, **params)
 
 naryops = [
+    lax.convert_element_type_p,
     lax.lt_p,
     lax.le_p,
     lax.gt_p,

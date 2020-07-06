@@ -168,9 +168,9 @@ class LazyArray(object):
         'Repeated computation detected'
       invals_ = [val.cache if isinstance(val, LazyArray) else val
                  for val in invals]
-      inslices = (None if instart is None else
+      inslices = [None if instart is None else
                   lax.dynamic_slice(inval, instart, count.shape)
-                  for inval, instart, count in zip(invals_, instarts, counts))
+                  for inval, instart, count in zip(invals_, instarts, counts)]
       outslice = outslice_from_inslices(*inslices)
       outstart, _ = box
       arr.cache = lax.dynamic_update_slice(arr.cache, outslice, outstart)
