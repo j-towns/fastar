@@ -234,9 +234,12 @@ def get_aval(x):
 def abstractify_lazy(invals):
   return [abstractify(x._aval) if isinstance(x, LazyArray) else x for x in invals]
 
-class Ones(jc.ShapedArray):
+class Ones:
   def __init__(self, shape):
-    super().__init__(shape, int)
+    self.shape = shape
+
+  ndim = property(lambda self: len(self.shape))
+  size = property(lambda self: np.prod(self.shape, dtype=int))
 
 def is_ones(count: Union[Array, Ones]):
   return type(count) is Ones
