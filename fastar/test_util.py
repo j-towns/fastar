@@ -53,7 +53,7 @@ def check_state(arrs):
   _check_state(arrs)
 
 def _identity(x):
-  return lax.add(x, jnp.zeros_like(x))
+  return lax.tie_in(x, x)
 
 def check_lazy_fun(fun_, *args, atol=None, rtol=None):
   def fun(*args):
