@@ -105,9 +105,10 @@ abstract_arrays._DIMENSION_TYPES.add(InfType)
 inf = InfType()
 _neginf = InfType(neg=True)
 
+def abstractify(x):
+  return ShapedArray(np.shape(x), dtypes.result_type(x))
+
 def fastar_jaxpr(flat_fun, *args_flat):
-  def abstractify(x):
-    return ShapedArray(np.shape(x), dtypes.result_type(x))
   in_avals = map(abstractify, args_flat)
   in_pvals = map(pe.PartialVal.unknown, in_avals)
   jaxpr, out_pvals, consts = pe.trace_to_jaxpr(
