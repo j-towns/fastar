@@ -10,8 +10,8 @@ import jax.test_util as jtu
 from jax import lax
 
 import fastar.test_util as tu
-from fastar.rules import conv_lhs_count, pad_incount_from_outcount, \
-  pad_dependency_rule
+from fastar.core import Ones
+from fastar.rules import conv_lhs_count, pad_dependency_rule
 
 
 # This is borrowed from lax_tests.py in the JAX tests directory.
@@ -414,22 +414,22 @@ def test_conv_lhs_count_strided():
   np.testing.assert_array_equal([[[1, 2, 2, 2, 3]]], slice)
 
 @pytest.mark.parametrize(
-  'outstart,outcount,inshape,expected',
-  [((7,), np.arange(7), (2,), [0, 3]), # outstart aligned with padded element
-   ((7,), np.arange(1), (1,), [0]), # outstart + outstop aligned with padded element
-   ((6,), np.arange(8), (2,), [1, 4]), # outstart in interior padding
-   ((6,), np.arange(3), (1,), [1]), # outstart, outstop in interior padding
-   ((0,), np.arange(4), (0,), []), # outstart in lo, no elements
-   ((1,), np.arange(4), (1,), [3]), # outstart in lo, including padded element
-   ((15,), np.arange(1), (0,), []), # outstart in hi
+  'outstart,outcount,expected_incount',
+  [((7,), np.arange(7), [0, 3]), # outstart aligned with padded element
+   ((7,), np.arange(1), [0]), # outstart + outstop aligned with padded element
+   ((7,), Ones((1,)), Ones((1,))), # outcount Ones
+   ((6,), np.arange(8), [1, 4]), # outstart in interior padding
+   ((6,), np.arange(3), [1]), # outstart, outstop in interior padding
+   ((0,), np.arange(4), None), # outstart in lo, no elements
+   ((1,), np.arange(4), [3]), # outstart in lo, including padded element
+   ((15,), np.arange(1), None), # outstart in hi
   ])
-def test_pad_incount_from_outcount(outstart, outcount, inshape, expected):
-  pad_args = np.arange(3), 0, ((4, 4, 2),)
-  actual = pad_incount_from_outcount(outstart, outcount, inshape, *pad_args)
-  np.testing.assert_array_equal(expected, actual)
-  (instart, _), (incount_, _), outslice = pad_dependency_rule((outstart, outcount.shape), *pad_args, allow_empty_slices=True)
-  assert inshape == incount_.shape
-  assert outslice(np.ones(inshape, int), 0).shape == outcount.shape
+def test_pad_dependency_rule(outstart, outcount, expected_incount):
+  (instart, _), (incount, _), outslice = pad_dependency_rule(
+    outstart, outcount, np.arange(3), 0, ((4, 4, 2),))
+  np.testing.assert_array_equal(expected_incount, incount)
+  inslice = None if incount is None else np.ones(incount.shape, int)
+  assert outslice(inslice, 0).shape == outcount.shape
 
 @pytest.mark.parametrize(
     'pred_shape,arg_shape,arg_dtype,rng_factory',
