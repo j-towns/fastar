@@ -1,7 +1,8 @@
-from typing import Callable, List
+from typing import Callable, List, Union
 
 import jax.numpy as jnp
 import jax.core as jc
+from jax.lax.lax import Array
 from jax.util import safe_map, safe_zip
 from jax import lax
 from fastar.box_util import (
@@ -128,13 +129,14 @@ class LazyArray(object):
         # TODO: pass var_idx to the dependency rule
         raise NotImplementedError
       else:
+        start, shape = to_global_coords(ubox)
         instarts, counts, _ = dependency_rules[primitive](
-            to_global_coords(ubox), *abstractify_lazy(invals), **params)
+          start, Ones(shape), *abstractify_lazy(invals), **params)
         for ival, istart, count in zip(invals, instarts, counts):
           if isinstance(ival, LazyArray) and istart is not None:
-            ibox = istart, count.shape
-            ival.child_counts.add(ibox,
-                                  count * (getbox(ival.state, ibox) != KNOWN))
+            ibox = istart, np.shape(count)
+            ival.child_counts.add(
+              ibox, materialize(count) * (getbox(ival.state, ibox) != KNOWN))
             ival._compute_ancestral_child_counts(ibox)
 
   def _toposorted_updates(self, box) -> List[Callable[[], None]]:
@@ -152,9 +154,10 @@ class LazyArray(object):
   def _process_childless_box(self, childless_boxes,
                              sorted_updates: List[Callable[[], None]]):
     arr, box = childless_boxes.pop()
+    start, shape = box
     invals, _, primitive, params, _ = arr.eqn
     instarts, counts, outslice_from_inslices = dependency_rules[primitive](
-      box, *abstractify_lazy(invals), **params)
+      start, Ones(shape), *abstractify_lazy(invals), **params)
     def update():
       if primitive.multiple_results:
         raise NotImplementedError
@@ -165,7 +168,7 @@ class LazyArray(object):
       invals_ = [val.cache if isinstance(val, LazyArray) else jnp.asarray(val)
                  for val in invals]
       inslices = [None if instart is None else
-                  lax.dynamic_slice(inval, instart, count.shape)
+                  lax.dynamic_slice(inval, instart, np.shape(count))
                   for inval, instart, count in zip(invals_, instarts, counts)]
       outslice = outslice_from_inslices(*inslices)
       outstart, _ = box
@@ -177,7 +180,7 @@ class LazyArray(object):
         ibox = istart, count.shape
         to_iglobal_coords = lambda b: (np.add(istart, b[0]), b[1])
         ival.child_counts.subtract(
-          ibox, count * (getbox(ival.state, ibox) != KNOWN))
+          ibox, materialize(count) * (getbox(ival.state, ibox) != KNOWN))
         ilocal_child_counts = ival.child_counts.get(ibox)
         childless_boxes.extend(
           [(ival, to_iglobal_coords(b))
@@ -230,3 +233,13 @@ def get_aval(x):
 
 def abstractify_lazy(invals):
   return [abstractify(x._aval) if isinstance(x, LazyArray) else x for x in invals]
+
+class Ones(jc.ShapedArray):
+  def __init__(self, shape):
+    super().__init__(shape, int)
+
+def is_ones(count: Union[Array, Ones]):
+  return type(count) == Ones
+
+def materialize(count: Union[Array, Ones]):
+  return np.ones(count.shape, int) if is_ones(count) else count

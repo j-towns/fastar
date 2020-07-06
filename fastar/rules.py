@@ -2,29 +2,29 @@ import numpy as np
 from jax import numpy as jnp, lax, lax_reference as laxref, ShapedArray
 from jax.util import safe_map, safe_zip, curry, unzip2, prod, unzip3
 
-from fastar.core import dependency_rules
+from fastar.core import dependency_rules, Ones, is_ones, materialize
 from fastar.jaxpr_util import abstractify
 
 map = safe_map
 zip = safe_zip
 
-def tie_in_dependency_rule(outbox, x, y):
-  outstarts, outshape = outbox
-  instarts = [None, outstarts]
-  incounts = [None, np.ones(outshape, int)]
+def tie_in_dependency_rule(outstart, outcount, x, y):
+  instarts = [None, outstart]
+  incounts = [None, outcount]
   return instarts, incounts, lambda x_part, y_part: lax.tie_in(x, y_part)
 
 dependency_rules[lax.tie_in_p] = tie_in_dependency_rule
 
 @curry
-def naryop_dependency_rule(prim, outbox, *operands, **params):
-  outstarts, outshape = outbox
+def naryop_dependency_rule(prim, outstart, outcount, *operands, **params):
+  if not is_ones(outcount):
+    raise NotImplementedError
   shapes = [np.array(np.shape(o)) for o in operands]
-  instarts = [np.where(shape == 1, 0, outstarts) if len(shape) else []
+  instarts = [np.where(shape == 1, 0, outstart) if len(shape) else []
               for shape in shapes]
-  incounts = [np.full(np.where(shape == 1, 1, outshape),
-                      prod(np.where(shape == 1, outshape, 1)))
-              if len(shape) else np.prod(outshape, dtype=int)
+  incounts = [np.full(np.where(shape == 1, 1, outcount.shape),
+                      prod(np.where(shape == 1, outcount.shape, 1)))
+              if len(shape) else outcount.size
               for shape in shapes]
   return instarts, incounts, lambda *inslices: prim.bind(*inslices, **params)
 
@@ -98,14 +98,15 @@ for op in naryops:
   dependency_rules[op] = naryop_dependency_rule(op)
 
 @curry
-def reduce_dependency_rule(prim, outbox, operand, axes):
-  outstart, outshape = outbox
+def reduce_dependency_rule(prim, outstart, outcount, operand, axes):
+  if not is_ones(outcount):
+    raise NotImplementedError
   instart = list(outstart)
-  inshape = list(outshape)
+  inshape = list(outcount.shape)
   for d in np.sort(axes):
     instart.insert(d, 0)
     inshape.insert(d, operand.shape[d])
-  return ([instart], [np.ones(inshape, int)],
+  return ([instart], [Ones(inshape)],
           lambda inslice: prim.bind(inslice, axes=axes))
 
 reduce_ops = [
@@ -120,21 +121,24 @@ reduce_ops = [
 for op in reduce_ops:
   dependency_rules[op] = reduce_dependency_rule(op)
 
-def squeeze_dependency_rule(outbox, operand, dimensions):
-  outstart, outshape = outbox
+def squeeze_dependency_rule(outstart, outcount, operand, dimensions):
+  if not is_ones(outcount):
+    raise NotImplementedError
   instart = list(outstart)
-  inshape = list(outshape)
+  inshape = list(outcount.shape)
   for d in np.sort(dimensions):
     instart.insert(d, 0)
     inshape.insert(d, 1)
-  return ([instart], [np.ones(inshape, int)],
+  return ([instart], [Ones(inshape)],
           lambda inslice: lax.squeeze(inslice, dimensions))
 
 dependency_rules[lax.squeeze_p] = squeeze_dependency_rule
 
-def concatenate_dependency_rule(outbox, *operands, dimension):
+def concatenate_dependency_rule(outstart, outcount, *operands, dimension):
+  if not is_ones(outcount):
+    raise NotImplementedError
   dim = dimension
-  outstart, outshape = map(list, outbox)
+  outstart, outshape = list(outstart), list(outcount.shape)
   dimstart, dimshape = outstart[dim], outshape[dim]
   position = 0
   instarts = []
@@ -149,7 +153,7 @@ def concatenate_dependency_rule(outbox, *operands, dimension):
                         position + shape[dim] - instart[dim])]
                  + outshape[dim + 1:])
       instarts.append(instart)
-      incounts.append(np.ones(inshape, int))
+      incounts.append(Ones(inshape))
     else:
       instarts.append(None)
       incounts.append(None)
@@ -160,38 +164,39 @@ def concatenate_dependency_rule(outbox, *operands, dimension):
 
 dependency_rules[lax.concatenate_p] = concatenate_dependency_rule
 
-def slice_dependency_rule(outbox, operand, start_indices, limit_indices, strides):
-  outstart, outshape = outbox
-  strides = np.ones_like(outshape) if strides is None else np.array(strides)
-  zeros = np.zeros_like(outshape)
+def slice_dependency_rule(outstart, outcount, operand, start_indices, limit_indices, strides):
+  strides = np.ones_like(outcount.shape) if strides is None else np.array(strides)
+  zeros = np.zeros_like(outcount.shape)
   return ([outstart * strides + start_indices],
-          [lax.pad(np.ones(outshape, int), 0, zip(zeros, zeros, strides - 1))],
+          [lax.pad(materialize(outcount), 0, zip(zeros, zeros, strides - 1))],
           lambda inslice: lax.slice(inslice, zeros, inslice.shape, strides))
 
 dependency_rules[lax.slice_p] = slice_dependency_rule
 
-def transpose_dependency_rule(outbox, operand, permutation):
-  outstart, outshape = outbox
+def transpose_dependency_rule(outstart, outcount, operand, permutation):
   inverse_perm = np.argsort(permutation)
   return ([np.take(outstart, inverse_perm)],
-          [np.ones(np.take(outshape, inverse_perm), int)],
+          [Ones(np.take(outcount.shape, inverse_perm))
+           if is_ones(outcount) else laxref.transpose(outcount, inverse_perm)],
           lambda inslice: lax.transpose(inslice, permutation))
 
 dependency_rules[lax.transpose_p] = transpose_dependency_rule
 
-def rev_dependency_rule(outbox, operand, dimensions):
-  outstart, outshape = outbox
+def rev_dependency_rule(outstart, outcount, operand, dimensions):
   instart = [size - (start + outsize) if d in dimensions else start
              for d, (size, outsize, start)
-             in enumerate(zip(operand.shape, outshape, outstart))]
-  return ([instart], [np.ones(outshape, int)],
+             in enumerate(zip(operand.shape, outcount.shape, outstart))]
+  return ([instart], [Ones(outcount.shape) if is_ones(outcount) else
+                      lax.rev(outcount, dimensions)],
           lambda inslice: lax.rev(inslice, dimensions))
 
 dependency_rules[lax.rev_p] = rev_dependency_rule
 
 def broadcast_in_dim_dependency_rule(
-    outbox, operand, shape, broadcast_dimensions):
-  outstart, outshape = outbox
+    outstart, outcount, operand, shape, broadcast_dimensions):
+  if not is_ones(outcount):
+    raise NotImplementedError
+  outshape = outcount.shape
   is_broadcast = np.not_equal(
       np.shape(operand), np.take(shape, broadcast_dimensions))
   instart = np.where(is_broadcast, 0, np.take(outstart, broadcast_dimensions))
@@ -202,59 +207,48 @@ def broadcast_in_dim_dependency_rule(
 
 dependency_rules[lax.broadcast_in_dim_p] = broadcast_in_dim_dependency_rule
 
-def dot_general_dependency_rule(outbox, lhs, rhs, dimension_numbers, precision):
-  out_start, out_shape = outbox
-  outslices = list(zip(*outbox))
+def dot_general_dependency_rule(outstart, outcount, lhs, rhs, dimension_numbers, precision):
+  if not is_ones(outcount):
+    raise NotImplementedError
+  outshape = outcount.shape
+  outslices = list(zip(outstart, outshape))
   (lhs_contracting, rhs_contracting), (lhs_batch, rhs_batch) = dimension_numbers
   lhs_other_out_dims = list(range(len(lhs_batch), len(lhs.shape) - len(lhs_contracting)))
-  rhs_other_out_dims = list(range(len(rhs_batch) + len(lhs_other_out_dims), len(out_shape)))
-  lhs_outbox = unzip2([outslices[d] for d in list(lhs_batch) + lhs_other_out_dims])
-  (lhs_start,), (lhs_incount,), _ = reduce_dependency_rule(None)(lhs_outbox, lhs, axes=lhs_contracting)
-  rhs_outbox = unzip2([outslices[d] for d in list(rhs_batch) + rhs_other_out_dims])
-  (rhs_start,), (rhs_incount,), _ = reduce_dependency_rule(None)(rhs_outbox, rhs, axes=rhs_contracting)
-  incounts = [lhs_incount * prod([out_shape[d] for d in rhs_other_out_dims]),
-              rhs_incount * prod([out_shape[d] for d in lhs_other_out_dims])]
+  rhs_other_out_dims = list(range(len(rhs_batch) + len(lhs_other_out_dims), len(outshape)))
+  lhs_outstart, lhs_outshape = unzip2([outslices[d] for d in list(lhs_batch) + lhs_other_out_dims])
+  (lhs_start,), (lhs_count,), _ = reduce_dependency_rule(None)(lhs_outstart, Ones(lhs_outshape), lhs, axes=lhs_contracting)
+  rhs_outstart, rhs_outshape = unzip2([outslices[d] for d in list(rhs_batch) + rhs_other_out_dims])
+  (rhs_start,), (rhs_count,), _ = reduce_dependency_rule(None)(rhs_outstart, Ones(rhs_outshape), rhs, axes=rhs_contracting)
+  incounts = [materialize(lhs_count) * prod([outshape[d] for d in rhs_other_out_dims]),
+              materialize(rhs_count) * prod([outshape[d] for d in lhs_other_out_dims])]
   return ([lhs_start, rhs_start], incounts,
           lambda *inslices: lax.dot_general(*inslices, dimension_numbers, precision))
 
 dependency_rules[lax.dot_general_p] = dot_general_dependency_rule
 
-def pad_dependency_rule(outbox, operand, padding_value, padding_config, allow_empty_slices=False):
-  outstart, outshape = outbox
+def pad_dependency_rule(outstart, outcount, operand, padding_value, padding_config):
   lo, _, interior = unzip3(padding_config)
   dilation = np.array(interior) + 1
   outstart_lo = np.subtract(outstart, lo)
   inclip = lambda indices: np.clip(indices, 0, operand.shape)
   instart = inclip(lax.lax._ceil_divide(outstart_lo, dilation))
-  instop = inclip(lax.lax._ceil_divide(outstart_lo + outshape, dilation))
+  instop = inclip(lax.lax._ceil_divide(outstart_lo + outcount.shape, dilation))
   inshape = instop - instart
-  def outslice(inslice, padding_value):
-    assert inslice is None or np.array_equal(inslice.shape, inshape)
-    if prod(inshape) == 0:
-      return jnp.full(outshape, padding_value)
-    offset = instart * dilation - outstart_lo
-    limit = offset + np.maximum(0, (np.array(inshape) - 1) * dilation + 1)
-    return lax.pad(inslice, padding_value, zip(offset, np.array(outshape) - limit, interior))
   insize = prod(inshape)
-  padcount = prod(outshape) - insize
-  return ([instart if insize or allow_empty_slices else None, ()],
-          [np.ones(inshape, int) if insize or allow_empty_slices else None, padcount], outslice)
-
-dependency_rules[lax.pad_p] = pad_dependency_rule
-
-def pad_incount_from_outcount(outstart, outcount, inshape, operand, padding_value, padding_config):
-  if prod(inshape) == 0:
-    return np.empty(inshape, operand.dtype)
-  lo, _, interior = unzip3(padding_config)
-  outstart_lo = np.subtract(outstart, lo)
-  dilation = np.array(interior) + 1
-  inclip = lambda indices: np.clip(indices, 0, operand.shape)
-  instart = inclip(lax.lax._ceil_divide(outstart_lo, dilation))
   offset = instart * dilation - outstart_lo
   limit = offset + np.maximum(0, (np.array(inshape) - 1) * dilation + 1)
-  incount = laxref.slice(outcount, offset, limit, dilation)
-  assert incount.shape == inshape
-  return incount
+  incount = Ones(inshape) if is_ones(outcount) else laxref.slice(
+    outcount, offset, limit, dilation) if insize else None
+  padcount = outcount.size - insize
+  def outslice(inslice, padding_value):
+    assert inslice is None or np.array_equal(inslice.shape, inshape)
+    return (lax.pad(inslice, padding_value,
+                    zip(offset, np.array(outcount.shape) - limit, interior))
+            if insize else jnp.full(outcount.shape, padding_value, operand.dtype))
+  return ([instart if insize else None, ()],
+          [incount, padcount], outslice)
+
+dependency_rules[lax.pad_p] = pad_dependency_rule
 
 def outer_product(vectors):
   return np.einsum(*(x for (i, vector) in enumerate(vectors) for x in (vector, [i])))
@@ -277,10 +271,11 @@ def conv_lhs_count(instart, inshape, lhs_shape, rhs_shape, window_strides):
     for side, start, size in zip(single_dim_counts, instart[2:], inshape[2:])]
   return np.broadcast_to(outer_product(single_dim_count_slices), inshape)
 
-def conv_dependency_rule(outbox, lhs, rhs, window_strides, precision):
-  outstart, outshape = outbox
+def conv_dependency_rule(outstart, outcount, lhs, rhs, window_strides, precision):
+  if not is_ones(outcount):
+    raise NotImplementedError
   batch_start, outchannel_start, *spatial_outstart = outstart
-  batch_shape, outchannel_shape, *spatial_outshape = outshape
+  batch_shape, outchannel_shape, *spatial_outshape = outcount.shape
   lhs_start = [batch_start, 0] + list(np.array(spatial_outstart) * window_strides)
   lhs_shape = [batch_shape, lhs.shape[1]] + list(np.subtract(spatial_outshape, 1) * window_strides + rhs.shape[2:])
   full_rhs_channels = list(rhs.shape[1:])
@@ -288,43 +283,41 @@ def conv_dependency_rule(outbox, lhs, rhs, window_strides, precision):
   rhs_shape = [outchannel_shape] + full_rhs_channels
   return ((lhs_start, rhs_start),
           (conv_lhs_count(lhs_start, lhs_shape, lhs.shape, rhs.shape, window_strides),
-           np.ones(rhs_shape, int)), lambda lhs_slice, rhs_slice:
+           Ones(rhs_shape)), lambda lhs_slice, rhs_slice:
           lax.conv(lhs_slice, rhs_slice, window_strides, 'VALID', precision))
 
 def conv_general_dilated_dependency_rule(
-    outbox, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
+    outstart, outcount, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
     dimension_numbers, feature_group_count, batch_group_count, precision, **_):
+  if not is_ones(outcount):
+    raise NotImplementedError
   if feature_group_count > 1 or batch_group_count > 1:
     raise NotImplementedError("Feature and batch groups are not implemented.")
   if np.any(np.not_equal(rhs_dilation, 1)):
     raise NotImplementedError("Dilated convs are not yet implemented.")
-  _, outshape = outbox
-
   lhs_spec, rhs_spec, out_spec = dimension_numbers
-  lhs_transpose = lambda lhs: lax.transpose(lhs, lhs_spec)
-  rhs_transpose = lambda rhs: lax.transpose(rhs, rhs_spec)
   # abstract evaluations to retrieve shapes:
   lhs = lax.transpose_p.abstract_eval(abstractify(lhs), permutation=lhs_spec)
   rhs = lax.transpose_p.abstract_eval(abstractify(rhs), permutation=rhs_spec)
-  pad_args = lhs, ShapedArray((), lhs.dtype)
+  pad_val = ShapedArray((), lhs.dtype)
   pad_config = [(0, 0, 0)] * 2 + [
     (lo, hi, dil - 1) for (lo, hi), dil in zip(padding, lhs_dilation)]
-  padded_lhs = lax.pad_p.abstract_eval(*pad_args, padding_config=pad_config)
-  (outstart,), (outcount,), out_transpose = transpose_dependency_rule(outbox, None, np.argsort(out_spec))
+  padded_lhs = lax.pad_p.abstract_eval(lhs, pad_val, padding_config=pad_config)
+  (outstart,), (outcount,), out_transpose = transpose_dependency_rule(
+    outstart, outcount, None, np.argsort(out_spec))
   (padded_lhs_start, rhs_start), (padded_lhs_count, rhs_count), conv = conv_dependency_rule(
-    (outstart, outcount.shape), padded_lhs, rhs, window_strides, precision)
+    outstart, outcount, padded_lhs, rhs, window_strides, precision)
   (lhs_start, _), (lhs_count, _), lhs_pad = pad_dependency_rule(
-    (padded_lhs_start, padded_lhs_count.shape), *pad_args, pad_config, allow_empty_slices=True)
-  lhs_count = pad_incount_from_outcount(padded_lhs_start, padded_lhs_count,
-                                        lhs_count.shape, *pad_args, pad_config)
-  inverse_lhs_perm = np.argsort(lhs_spec)
-  inverse_rhs_perm = np.argsort(rhs_spec)
-  return ((np.take(lhs_start, inverse_lhs_perm) if lhs_count.size else None,
-           np.take(rhs_start, inverse_rhs_perm)),
-          (laxref.transpose(lhs_count, inverse_lhs_perm) if lhs_count.size else None,
-           laxref.transpose(rhs_count, inverse_rhs_perm)),
+    padded_lhs_start, padded_lhs_count, lhs, pad_val, pad_config)
+  if lhs_start is not None:
+    (lhs_start,), (lhs_count,), lhs_transpose = transpose_dependency_rule(
+      lhs_start, lhs_count, None, lhs_spec)
+  (rhs_start,), (rhs_count,), rhs_transpose = transpose_dependency_rule(
+    rhs_start, rhs_count, None, rhs_spec)
+  return ([lhs_start, rhs_start], [lhs_count, rhs_count],
           lambda lhs_slice, rhs_slice: out_transpose(conv(
-            lhs_pad(lhs_transpose(lhs_slice) if lhs_count.size else None, np.zeros((), lhs.dtype)),
+            lhs_pad(None if lhs_slice is None else lhs_transpose(lhs_slice),
+                    np.zeros((), lhs.dtype)),
             rhs_transpose(rhs_slice))))
 
 dependency_rules[lax.conv_general_dilated_p] = conv_general_dilated_dependency_rule
