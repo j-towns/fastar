@@ -2,7 +2,7 @@ from functools import partial
 
 import numpy as np
 from jax import lax, numpy as jnp
-from jax.util import safe_map, safe_zip, curry, unzip2, prod, unzip3
+from jax.util import safe_map, safe_zip, curry, unzip2, unzip3
 
 from fastar.core import dependency_rules
 
@@ -24,7 +24,7 @@ def naryop_dependency_rule(prim, outbox, *operands, **params):
   instarts = [np.where(shape == 1, 0, outstarts) if len(shape) else []
               for shape in shapes]
   incounts = [np.full(np.where(shape == 1, 1, outshape),
-                      prod(np.where(shape == 1, outshape, 1)))
+                      np.prod(np.where(shape == 1, outshape, 1)))
               if len(shape) else np.prod(outshape, dtype=int)
               for shape in shapes]
   return instarts, incounts, lambda *inslices: prim.bind(*inslices, **params)
@@ -197,7 +197,7 @@ def broadcast_in_dim_dependency_rule(
       np.shape(operand), np.take(shape, broadcast_dimensions))
   instart = np.where(is_broadcast, 0, np.take(outstart, broadcast_dimensions))
   inshape = np.where(is_broadcast, 1, np.take(outshape, broadcast_dimensions))
-  incount = np.full(inshape, prod(shape) // prod(operand.shape))
+  incount = np.full(inshape, np.prod(shape) // np.prod(operand.shape))
   return [instart], [incount], lambda inslice: lax.broadcast_in_dim(
     inslice, outshape, broadcast_dimensions)
 
@@ -213,8 +213,8 @@ def dot_general_dependency_rule(outbox, lhs, rhs, dimension_numbers, precision):
   (lhs_start,), (lhs_incount,), _ = reduce_dependency_rule(None)(lhs_outbox, lhs, axes=lhs_contracting)
   rhs_outbox = unzip2([outslices[d] for d in list(rhs_batch) + rhs_other_out_dims])
   (rhs_start,), (rhs_incount,), _ = reduce_dependency_rule(None)(rhs_outbox, rhs, axes=rhs_contracting)
-  incounts =  [lhs_incount * prod([out_shape[d] for d in rhs_other_out_dims]),
-               rhs_incount * prod([out_shape[d] for d in lhs_other_out_dims])]
+  incounts =  [lhs_incount * np.prod([out_shape[d] for d in rhs_other_out_dims]),
+               rhs_incount * np.prod([out_shape[d] for d in lhs_other_out_dims])]
   return ([lhs_start, rhs_start], incounts,
           lambda *inslices: lax.dot_general(*inslices, dimension_numbers, precision))
 
@@ -230,8 +230,8 @@ def pad_dependency_rule(outbox, operand, _, padding_config):
   instart = inclip(lo_sign * np.floor_divide(lo_sign * (outstart - lo), dilation))
   instop = inclip(lax.lax._ceil_divide(outstart + outshape - lo, dilation))
   inshape = instop - instart
-  insize = prod(inshape)
-  padcount = prod(outshape) - insize
+  insize = np.prod(inshape)
+  padcount = np.prod(outshape) - insize
   def outslice(inslice, padding_value):
     if inslice is None:
       return jnp.full(outshape, padding_value)
