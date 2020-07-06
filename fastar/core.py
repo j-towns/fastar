@@ -239,7 +239,7 @@ class Ones(jc.ShapedArray):
     super().__init__(shape, int)
 
 def is_ones(count: Union[Array, Ones]):
-  return type(count) == Ones
+  return type(count) is Ones
 
 def materialize(count: Union[Array, Ones]):
   return np.ones(count.shape, int) if is_ones(count) else count

@@ -9,9 +9,8 @@ map = safe_map
 zip = safe_zip
 
 def tie_in_dependency_rule(outstart, outcount, x, y):
-  instarts = [None, outstart]
-  incounts = [None, outcount]
-  return instarts, incounts, lambda x_part, y_part: lax.tie_in(x, y_part)
+  return ([None, outstart], [None, outcount],
+          lambda _, y_slice: lax.tie_in(x, y_slice))
 
 dependency_rules[lax.tie_in_p] = tie_in_dependency_rule
 
@@ -168,7 +167,7 @@ def slice_dependency_rule(outstart, outcount, operand, start_indices, limit_indi
   strides = np.ones_like(outcount.shape) if strides is None else np.array(strides)
   zeros = np.zeros_like(outcount.shape)
   return ([outstart * strides + start_indices],
-          [lax.pad(materialize(outcount), 0, zip(zeros, zeros, strides - 1))],
+          [laxref.pad(materialize(outcount), 0, zip(zeros, zeros, strides - 1))],
           lambda inslice: lax.slice(inslice, zeros, inslice.shape, strides))
 
 dependency_rules[lax.slice_p] = slice_dependency_rule
@@ -177,7 +176,7 @@ def transpose_dependency_rule(outstart, outcount, operand, permutation):
   inverse_perm = np.argsort(permutation)
   return ([np.take(outstart, inverse_perm)],
           [Ones(np.take(outcount.shape, inverse_perm))
-           if is_ones(outcount) else laxref.transpose(outcount, inverse_perm)],
+           if is_ones(outcount) else np.transpose(outcount, inverse_perm)],
           lambda inslice: lax.transpose(inslice, permutation))
 
 dependency_rules[lax.transpose_p] = transpose_dependency_rule
