@@ -1,8 +1,9 @@
 import numpy as np
-from jax import numpy as jnp, lax, lax_reference as laxref
+from jax import numpy as jnp, lax, lax_reference as laxref, ShapedArray
 from jax.util import safe_map, safe_zip, curry, unzip2, prod, unzip3
 
 from fastar.core import dependency_rules
+from fastar.jaxpr_util import abstractify
 
 map = safe_map
 zip = safe_zip
@@ -302,19 +303,20 @@ def conv_general_dilated_dependency_rule(
   lhs_spec, rhs_spec, out_spec = dimension_numbers
   lhs_transpose = lambda lhs: lax.transpose(lhs, lhs_spec)
   rhs_transpose = lambda rhs: lax.transpose(rhs, rhs_spec)
-  # evaluations on abstract inputs to retrieve shapes:
-  lhs = lhs_transpose(lhs)
-  rhs = rhs_transpose(rhs)
-  padding_value = np.zeros((), lhs.dtype)
-  pad_args = (lhs, padding_value, [(0, 0, 0)] * 2 + [
-    (lo, hi, dil - 1) for (lo, hi), dil in zip(padding, lhs_dilation)])
-  padded_lhs = lax.pad(*pad_args)
+  # abstract evaluations to retrieve shapes:
+  lhs = lax.transpose_p.abstract_eval(abstractify(lhs), permutation=lhs_spec)
+  rhs = lax.transpose_p.abstract_eval(abstractify(rhs), permutation=rhs_spec)
+  pad_args = lhs, ShapedArray((), lhs.dtype)
+  pad_config = [(0, 0, 0)] * 2 + [
+    (lo, hi, dil - 1) for (lo, hi), dil in zip(padding, lhs_dilation)]
+  padded_lhs = lax.pad_p.abstract_eval(*pad_args, padding_config=pad_config)
   (outstart,), (outcount,), out_transpose = transpose_dependency_rule(outbox, None, np.argsort(out_spec))
   (padded_lhs_start, rhs_start), (padded_lhs_count, rhs_count), conv = conv_dependency_rule(
     (outstart, outcount.shape), padded_lhs, rhs, window_strides, precision)
   (lhs_start, _), (lhs_count, _), lhs_pad = pad_dependency_rule(
-    (padded_lhs_start, padded_lhs_count.shape), *pad_args, allow_empty_slices=True)
-  lhs_count = pad_incount_from_outcount(padded_lhs_start, padded_lhs_count, lhs_count.shape, *pad_args)
+    (padded_lhs_start, padded_lhs_count.shape), *pad_args, pad_config, allow_empty_slices=True)
+  lhs_count = pad_incount_from_outcount(padded_lhs_start, padded_lhs_count,
+                                        lhs_count.shape, *pad_args, pad_config)
   inverse_lhs_perm = np.argsort(lhs_spec)
   inverse_rhs_perm = np.argsort(rhs_spec)
   return ((np.take(lhs_start, inverse_lhs_perm),
@@ -322,7 +324,7 @@ def conv_general_dilated_dependency_rule(
           (laxref.transpose(lhs_count, inverse_lhs_perm),
            laxref.transpose(rhs_count, inverse_rhs_perm)),
           lambda lhs_slice, rhs_slice: out_transpose(conv(
-            lhs_pad(lhs_transpose(lhs_slice), padding_value),
+            lhs_pad(lhs_transpose(lhs_slice), np.zeros((), lhs.dtype)),
             rhs_transpose(rhs_slice))))
 
 dependency_rules[lax.conv_general_dilated_p] = conv_general_dilated_dependency_rule
