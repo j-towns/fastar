@@ -166,7 +166,7 @@ class LazyArray(object):
       # Check that none of this box has already been computed
       assert np.all(getbox(arr.state, box) == REQUESTED), \
         'Repeated computation detected'
-      invals_ = [val.cache if isinstance(val, LazyArray) else val
+      invals_ = [val.cache if isinstance(val, LazyArray) else jnp.asarray(val)
                  for val in invals]
       inslices = [None if instart is None else
                   lax.dynamic_slice(inval, instart, count.shape)
