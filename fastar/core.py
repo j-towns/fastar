@@ -168,11 +168,11 @@ class LazyArray(object):
       invals_ = [val.cache if isinstance(val, LazyArray) else jnp.asarray(val)
                  for val in invals]
       inslices = [None if instart is None else
-                  lax.dynamic_slice(inval, instart, np.shape(count))
+                  lax.dynamic_slice(inval, tuple(instart), tuple(np.shape(count)))
                   for inval, instart, count in zip(invals_, instarts, counts)]
       outslice = outslice_from_inslices(*inslices)
       outstart, _ = box
-      arr.cache = lax.dynamic_update_slice(arr.cache, outslice, outstart)
+      arr.cache = lax.dynamic_update_slice(arr.cache, tuple(outslice), tuple(outstart))
       setbox(arr.state, box, KNOWN)
     sorted_updates.append(update)
     for ival, istart, count in zip(invals, instarts, counts):
