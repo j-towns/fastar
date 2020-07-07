@@ -11,7 +11,7 @@ from jax import lax
 
 import fastar.test_util as tu
 from fastar.core import Ones
-from fastar.rules import conv_lhs_count, pad_dependency_rule
+from fastar.rules import conv_incounts, pad_dependency_rule
 
 
 # This is borrowed from lax_tests.py in the JAX tests directory.
@@ -406,29 +406,22 @@ def test_conv_general_dilated(lhs_shape, rhs_shape, dtype, strides,
       batch_group_count=batch_group_count)
   tu.check_lazy_fun(fun, *args, rtol=.005, atol=.2)
 
-def test_conv_lhs_count():
-  lhs_shape = (1, 1, 3, 7)
-  rhs_shape = (1, 1, 2, 3)
-  expected = [[[
+def test_conv_incounts():
+  rhs_shape = (4, 1, 2, 3)
+  lhs_count, rhs_count = conv_incounts((8, 1, 3, 7), rhs_shape, (1, 1))
+  np.testing.assert_array_equal(4 * np.array(8 * [[[
     [1, 2, 3, 3, 3, 2, 1],
     [2, 4, 6, 6, 6, 4, 2],
     [1, 2, 3, 3, 3, 2, 1]
-  ]]]
-  actual = conv_lhs_count((0, 0, 0, 0), lhs_shape, lhs_shape, rhs_shape, (1, 1))
-  np.testing.assert_array_equal(expected, actual)
-  expected_slice = [[[[6, 4],
-                      [3, 2]]]]
-  slice = conv_lhs_count((0, 0, 1, 4), (1, 1, 2, 2), lhs_shape, rhs_shape, (1, 1))
-  np.testing.assert_array_equal(expected_slice, slice)
+  ]]]), lhs_count)
+  np.testing.assert_array_equal(np.full(rhs_shape, 8), rhs_count)
 
-def test_conv_lhs_count_strided():
-  lhs_shape = (1, 1, 21)
+def test_conv_incounts_strided():
   rhs_shape = (1, 1, 7)
-  expected = [[[1, 1, 1, 2, 2, 2, 3, 2, 2, 3, 2, 2, 3, 2, 2, 2, 1, 1, 1, 0, 0]]]
-  actual = conv_lhs_count((0, 0, 0), lhs_shape, lhs_shape, rhs_shape, (3,))
-  np.testing.assert_array_equal(expected, actual)
-  slice = conv_lhs_count((0, 0, 2), (1, 1, 5), lhs_shape, rhs_shape, (3,))
-  np.testing.assert_array_equal([[[1, 2, 2, 2, 3]]], slice)
+  lhs_count, rhs_count = conv_incounts((1, 1, 21), rhs_shape, (3,))
+  np.testing.assert_array_equal(
+    [[[1, 1, 1, 2, 2, 2, 3, 2, 2, 3, 2, 2, 3, 2, 2, 2, 1, 1, 1, 0, 0]]], lhs_count)
+  np.testing.assert_array_equal(np.ones(rhs_shape), rhs_count)
 
 @pytest.mark.parametrize(
   'outstart,outcount,expected_incount',
