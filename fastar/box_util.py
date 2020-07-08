@@ -79,7 +79,7 @@ def box_finder(idxs):
         test_starts[d] -= 1
       test_starts[d] = starts[d] + shape[d]
       while _contains_box(idxs, test_starts, test_shape):
-        stops[d] += 1
+        shape[d] += 1
         _remove_box(idxs, test_starts, test_shape)
         test_starts[d] += 1
       test_shape[d] = shape[d]
