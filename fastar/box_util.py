@@ -47,59 +47,6 @@ def addbox(arr, box, val):
 def getbox(arr, box):
   return arr[box_to_slice(box)]
 
-def circular_add(arr, arr_starts, box, val):
-  box_starts, box_shape = box
-  assert val.shape == tuple(box_shape)
-  box_stops = np.add(box_starts, box_shape)
-  assert arr.ndim == len(arr_starts) == len(box_starts) == len(box_shape)
-  assert np.all(arr_starts <= box_starts)
-  assert np.all(box_starts < box_stops)
-  assert np.all(box_stops <= np.add(arr_starts, arr.shape))
-  starts = np.mod(box_starts, arr.shape)
-  stops = np.mod(np.subtract(box_stops, 1), arr.shape) + 1
-  arr_starts = np.mod(arr_starts, arr.shape)
-  def split_add_(new_slice, val):
-    d = len(new_slice)
-    if d == arr.ndim:
-      arr[tuple(map(lambda s: slice(*s), new_slice))] += val
-    else:
-      start = starts[d]
-      stop = stops[d]
-      arr_start = arr_starts[d]
-      if stop > arr_start or start < arr_start:
-        split_add_(new_slice + [(start, stop)], val)
-      else:
-        val_lo = val[d * (slice(None),) + (slice(arr.shape[d] - start),)]
-        val_hi = val[d * (slice(None),) + (slice(arr.shape[d] - start, None),)]
-        split_add_(new_slice + [(start, arr.shape[d])], val_lo)
-        split_add_(new_slice + [(0, stop)], val_hi)
-  return split_add_([], val)
-
-def circular_get(arr, arr_starts, box):
-  # TODO: Speed this up by pre-allocating a box-sized array and copying into it
-  box_starts, box_shape = box
-  box_stops = np.add(box_starts, box_shape)
-  assert arr.ndim == len(arr_starts) == len(box_starts) == len(box_shape)
-  assert np.all(arr_starts <= box_starts)
-  assert np.all(box_starts < box_stops)
-  assert np.all(box_stops <= np.add(arr_starts, arr.shape))
-  starts = np.mod(box_starts, arr.shape)
-  stops = np.mod(np.subtract(box_stops, 1), arr.shape) + 1
-  arr_starts = np.mod(arr_starts, arr.shape)
-  def get_(arr, d):
-    if d == arr.ndim:
-      return arr
-    start = starts[d]
-    stop = stops[d]
-    arr_start = arr_starts[d]
-    if stop > arr_start or start < arr_start:
-      return get_(arr[d * (slice(None),) + (slice(start, stop),)], d + 1)
-    else:
-      arr_lo = arr[d * (slice(None),) + (slice(start, None),)]
-      arr_hi = arr[d * (slice(None),) + (slice(stop),)]
-      return np.concatenate([get_(arr_lo, d + 1), get_(arr_hi, d + 1)], d)
-  return get_(arr, 0)
-
 def test_boxes(starts, sizes, dim):
   assert sizes[dim] == 1
   i = 1
