@@ -1,22 +1,11 @@
-from typing import Sequence
 import numpy as np
 
-from jax import linear_util as lu
-from jax.tree_util import tree_unflatten, tree_flatten
-from jax.util import safe_map, safe_zip, unzip2
+from jax import (ShapedArray, abstract_arrays, dtypes, core as jc,
+                 linear_util as lu)
+from jax.util import safe_map, safe_zip
 from jax.core import Literal, Jaxpr, JaxprEqn, Var, TypedJaxpr
-from jax import tree_util
-from jax.interpreters import xla
-import jax.interpreters.partial_eval as pe
-from jax import ShapedArray
-from jax import abstract_arrays
-import jax.core as jc
-from jax import dtypes
+from jax.interpreters import xla, partial_eval as pe
 from functools import partial
-
-import numpy as onp
-from jax import tree_util
-
 
 map = safe_map
 zip = safe_zip
@@ -42,7 +31,7 @@ class InfType:
       return _neginf if self.neg else inf
 
   def __neg__(self):
-    return inf if self.neg else _negif
+    return inf if self.neg else _neginf
 
   def __mul__(self, other):
     if not isinstance(other, InfType) and other == 0:
@@ -141,7 +130,7 @@ class Literal_(Literal):
 
   @property
   def aval(self):
-    return raise_to_shaped(get_aval(self.val))
+    return jc.raise_to_shaped(jc.get_aval(self.val))
 
   def __hash__(self):
     return id(self.val)

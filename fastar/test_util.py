@@ -1,18 +1,11 @@
-from functools import partial
 from itertools import chain
 from random import shuffle
-import jax.lax as lax
 import numpy as np
-import jax.numpy as jnp
-import numpy.testing as np_testing
-import jax.numpy as jnp
-import jax.test_util as jtu
-from jax import vjp
+from jax import lax, numpy as jnp, test_util as jtu
 from jax.util import safe_map, safe_zip
 from jax.tree_util import tree_multimap, tree_flatten, tree_map
 
-from fastar import lazy_eval, lazy_eval_fixed_point, LazyArray
-from fastar import core
+from fastar import core, lazy_eval, lazy_eval_fixed_point, LazyArray
 
 map = safe_map
 zip = safe_zip
