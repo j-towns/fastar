@@ -47,14 +47,6 @@ def addbox(arr, box, val):
 def getbox(arr, box):
   return arr[box_to_slice(box)]
 
-def test_boxes(starts, sizes, dim):
-  assert sizes[dim] == 1
-  i = 1
-  while True:
-    yield tuple(start + i if d == dim else slice(start, start + size)
-                for d, (start, size) in enumerate(zip(starts, sizes)))
-    i = i + 1
-
 def _contains_box(idxs, starts, shape):
   return all(tuple(np.add(starts, i)) in idxs for i in np.ndindex(*shape))
 

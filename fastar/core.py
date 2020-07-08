@@ -61,10 +61,12 @@ class LazyArray(object):
     return self._aval.ndim
 
   def _compute_ancestral_child_counts(self, box):
+    start, shape = box
     invals, _, primitive, params, _ = self.eqn
     local_state = getbox(self.state, box) if self.shape else self.state
-    to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
-    self.todo.update(map(tuple, np.argwhere(local_state == UNKNOWN)))
+    new_todo = map(tuple, np.add(start, np.argwhere(local_state == UNKNOWN)))
+    assert self.todo.isdisjoint(new_todo)
+    self.todo.update(new_todo)
     setbox(self.state, box,
            np.where(local_state == UNKNOWN, REQUESTED, local_state))
     for ubox in box_finder(self.todo):
@@ -72,9 +74,9 @@ class LazyArray(object):
         # TODO: pass var_idx to the dependency rule
         raise NotImplementedError
       else:
-        start, shape = to_global_coords(ubox)
+        ustart, ushape = ubox
         instarts, counts, _ = dependency_rules[primitive](
-          start, Ones(shape), *abstractify_lazy(invals), **params)
+          ustart, Ones(ushape), *abstractify_lazy(invals), **params)
         for ival, istart, count in zip(invals, instarts, counts):
           if isinstance(ival, LazyArray) and istart is not None:
             ibox = istart, np.shape(count)
