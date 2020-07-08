@@ -55,24 +55,45 @@ def test_boxes(starts, sizes, dim):
                 for d, (start, size) in enumerate(zip(starts, sizes)))
     i = i + 1
 
-def box_finder(known, value):
-  it = np.nditer(known, flags=['multi_index'])
-  for k in it:
-    if k == value:
-      starts = it.multi_index
-      sizes = known.ndim * [1]
-      for d in range(known.ndim):
-        box_iter = test_boxes(starts, sizes, d)
-        while (starts[d] + sizes[d] < known.shape[d] and
-               np.all(known[next(box_iter)] == value)):
-          sizes[d] = sizes[d] + 1
-      yield starts, sizes
+def _contains_box(idxs, starts, stops):
+  starts = tuple(starts)
+  d = len(stops)
+  if d:
+    return all(
+        _contains_box(idxs, starts[:d-1] + (i,) + starts[d:], stops[:d-1])
+        for i in range(starts[d-1], stops[-1]))
+  else:
+    return starts in idxs
 
-def static_box_finder(known, value):
-  tmp = known == value
-  ret = []
-  for box in box_finder(tmp, 1):
-    ret.append(box)
-    if tmp.shape:
-      tmp[box_to_slice(box)] = 0
-  return list(ret)
+def _remove_box(idxs, starts, stops):
+  starts = tuple(starts)
+  d = len(stops)
+  if d:
+    for i in range(starts[d-1], stops[-1]):
+      _remove_box(idxs, starts[:d-1] + (i,) + starts[d:], stops[:d-1])
+  else:
+    idxs.remove(starts)
+
+def box_finder(idxs):
+  while idxs:
+    starts = next(iter(idxs))
+    idxs.remove(starts)
+    starts = list(starts)
+    stops = [s + 1 for s in starts]
+    for d in range(len(starts)):
+      test_starts = starts.copy()
+      test_starts[d] -= 1
+      test_stops = stops[:d]
+      while _contains_box(idxs, test_starts, test_stops):
+        starts[d] -= 1
+        _remove_box(idxs, test_starts, test_stops)
+        test_starts[d] -= 1
+      test_starts[d] = stops[d]
+      while _contains_box(idxs, test_starts, test_stops):
+        stops[d] += 1
+        _remove_box(idxs, test_starts, test_stops)
+        test_starts[d] += 1
+    yield starts, np.subtract(stops, starts)
+
+def static_box_finder(arr, val=0):
+  return list(box_finder(set(map(tuple, np.argwhere(arr == val)))))

@@ -26,7 +26,8 @@ dependency_rules = {}
 class LazyError(Exception): pass
 
 class LazyArray(object):
-  __slots__ = ['cache', 'state', 'eqn', 'var_idx', 'child_counts', '_aval']
+  __slots__ = ['cache', 'state', 'eqn', 'var_idx', 'child_counts', '_aval',
+               'todo']
 
   def __init__(self, var):
     self._aval = var.aval
@@ -34,6 +35,7 @@ class LazyArray(object):
     self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
     self.state = np.zeros(var.aval.shape, int)
     self.child_counts = np.zeros(var.aval.shape, int)
+    self.todo = set()
     self.eqn = None
     self.var_idx = None
 
@@ -60,10 +62,12 @@ class LazyArray(object):
 
   def _compute_ancestral_child_counts(self, box):
     invals, _, primitive, params, _ = self.eqn
-    local_state = self.state[box_to_slice(box)] if self.shape else self.state
+    local_state = getbox(self.state, box) if self.shape else self.state
     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
-    for ubox in box_finder(local_state, UNKNOWN):
-      setbox(local_state, ubox, REQUESTED)
+    self.todo.update(map(tuple, np.argwhere(local_state == UNKNOWN)))
+    setbox(self.state, box,
+           np.where(local_state == UNKNOWN, REQUESTED, local_state))
+    for ubox in box_finder(self.todo):
       if primitive.multiple_results:
         # TODO: pass var_idx to the dependency rule
         raise NotImplementedError
