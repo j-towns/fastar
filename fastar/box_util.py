@@ -8,6 +8,9 @@ slice in each dimension.
 import numpy as np
 from jax.util import safe_map, safe_zip
 
+from itertools import product
+
+_map = map
 
 map = safe_map
 zip = safe_zip
@@ -47,35 +50,32 @@ def addbox(arr, box, val):
 def getbox(arr, box):
   return arr[box_to_slice(box)]
 
-def _contains_box(idxs, starts, shape):
-  return all(tuple(np.add(starts, i)) in idxs for i in np.ndindex(*shape))
+def ndindex(starts, stops):
+  return product(*_map(range, starts, stops))
 
-def _remove_box(idxs, starts, shape):
-  for i in np.ndindex(*shape):
-    idxs.remove(tuple(np.add(starts, i)))
+def _contains_box(idxs, starts, stops):
+  return idxs.issuperset(ndindex(starts, stops))
+
+def _remove_box(idxs, starts, stops):
+  idxs.difference_update(ndindex(starts, stops))
 
 def box_finder(idxs):
   while idxs:
-    starts = next(iter(idxs))
+    starts = min(idxs, key=lambda i: tuple(reversed(i)))
     idxs.remove(starts)
     starts = list(starts)
-    shape = len(starts) * [1]
-    test_shape = len(starts) * [1]
+    stops = [s + 1 for s in starts]
     for d in range(len(starts)):
       test_starts = starts.copy()
-      test_starts[d] -= 1
-      while _contains_box(idxs, test_starts, test_shape):
-        starts[d] -= 1
-        shape[d] += 1
-        _remove_box(idxs, test_starts, test_shape)
-        test_starts[d] -= 1
-      test_starts[d] = starts[d] + shape[d]
-      while _contains_box(idxs, test_starts, test_shape):
-        shape[d] += 1
-        _remove_box(idxs, test_starts, test_shape)
+      test_stops = stops.copy()
+      test_starts[d] += 1
+      test_stops[d] += 1
+      while _contains_box(idxs, test_starts, test_stops):
+        stops[d] += 1
+        _remove_box(idxs, test_starts, test_stops)
         test_starts[d] += 1
-      test_shape[d] = shape[d]
-    yield starts, shape
+        test_stops[d] += 1
+    yield starts, [stop - start for start, stop in zip(starts, stops)]
 
 def static_box_finder(arr, val=0):
   return list(box_finder(set(map(tuple, np.argwhere(arr == val)))))
