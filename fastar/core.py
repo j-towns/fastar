@@ -7,7 +7,7 @@ from jax.util import safe_map, safe_zip
 from jax import lax
 from fastar.box_util import (
   box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
-  addbox)
+  addbox, update_trie)
 from fastar.jaxpr_util import Literal_, inf, abstractify
 import numpy as np
 
@@ -35,7 +35,7 @@ class LazyArray(object):
     self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
     self.state = np.zeros(var.aval.shape, int)
     self.child_counts = np.zeros(var.aval.shape, int)
-    self.todo = set()
+    self.todo = {}
     self.eqn = None
     self.var_idx = None
 
@@ -63,13 +63,16 @@ class LazyArray(object):
   def _compute_ancestral_child_counts(self, box):
     start, shape = box
     invals, _, primitive, params, _ = self.eqn
-    local_state = getbox(self.state, box) if self.shape else self.state
-    new_todo = map(tuple, np.add(start, np.argwhere(local_state == UNKNOWN)))
-    assert self.todo.isdisjoint(new_todo)
-    self.todo.update(new_todo)
-    setbox(self.state, box,
-           np.where(local_state == UNKNOWN, REQUESTED, local_state))
-    for ubox in box_finder(self.todo):
+    if self.shape:
+      local_state = getbox(self.state, box)
+      update_trie(self.todo, np.add(start, np.argwhere(local_state == UNKNOWN)))
+      uboxes = box_finder(self.todo)
+      setbox(self.state, box,
+             np.where(local_state == UNKNOWN, REQUESTED, local_state))
+    else:
+      uboxes = [([], [])] if self.state == UNKNOWN else []
+      self.state = np.array(REQUESTED) if self.state == UNKNOWN else self.state
+    for ubox in uboxes:
       if primitive.multiple_results:
         # TODO: pass var_idx to the dependency rule
         raise NotImplementedError

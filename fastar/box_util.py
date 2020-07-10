@@ -53,29 +53,75 @@ def getbox(arr, box):
 def ndindex(starts, stops):
   return product(*_map(range, starts, stops))
 
-def _contains_box(idxs, starts, stops):
-  return idxs.issuperset(ndindex(starts, stops))
+def update_trie(trie, idxs):
+  for idx in idxs:
+    branch = trie
+    for i in idx:
+      branch = branch.setdefault(i, {})
 
-def _remove_box(idxs, starts, stops):
-  idxs.difference_update(ndindex(starts, stops))
+def _contains_rectangle(idx_trie, rectangle):
+  """
+  Return True if rectangle is contained in idx_trie, else False.
+  """
+  (start, stop), rectangle = rectangle
+  return all(
+    n in idx_trie
+    and (not rectangle or _contains_rectangle(idx_trie[n], rectangle))
+    for n in range(start, stop))
 
-def box_finder(idxs):
-  while idxs:
-    starts = min(idxs, key=lambda i: tuple(reversed(i)))
-    idxs.remove(starts)
-    starts = list(starts)
-    stops = [s + 1 for s in starts]
-    for d in range(len(starts)):
-      test_starts = starts.copy()
-      test_stops = stops.copy()
-      test_starts[d] += 1
-      test_stops[d] += 1
-      while _contains_box(idxs, test_starts, test_stops):
-        stops[d] += 1
-        _remove_box(idxs, test_starts, test_stops)
-        test_starts[d] += 1
-        test_stops[d] += 1
-    yield starts, [stop - start for start, stop in zip(starts, stops)]
+def _remove_rectangle(idx_trie, rectangle):
+  (start, stop), rectangle = rectangle
+  for root in list(idx_trie):
+    if start <= root < stop:
+      if rectangle:
+        _remove_rectangle(idx_trie[root], rectangle)
+      if not idx_trie[root]:
+        del idx_trie[root]
+
+def _find_rectangle(idx_trie):
+  """
+  Greedily find a rectangle in idx_trie.
+  """
+  start = min(idx_trie)
+  stop = start + 1
+  branch = idx_trie[start]
+  if branch:
+    rect = _find_rectangle(branch)
+    while stop in idx_trie and _contains_rectangle(idx_trie[stop], rect):
+      stop += 1
+    return (start, stop), rect
+  else:
+    while stop in idx_trie:
+      stop += 1
+    return (start, stop), ()
+
+def _to_box(rectangle):
+  starts = []
+  shape = []
+  while rectangle:
+    (start, stop), rectangle = rectangle
+    starts.append(start)
+    shape.append(stop - start)
+  return starts, shape
 
 def static_box_finder(arr, val=0):
-  return list(box_finder(set(map(tuple, np.argwhere(arr == val)))))
+  """
+  Greedily search for boxes in arr.
+  """
+  if np.shape(arr) == ():
+    return [([], [])] if arr else []
+
+  rectangles = []
+  idx_trie = {}
+  update_trie(idx_trie, np.argwhere(arr == val))
+  while idx_trie:
+    rect = _find_rectangle(idx_trie)
+    rectangles.append(rect)
+    _remove_rectangle(idx_trie, rect)
+  return map(_to_box, rectangles)
+
+def box_finder(idx_trie):
+  while idx_trie:
+    rect = _find_rectangle(idx_trie)
+    _remove_rectangle(idx_trie, rect)
+    yield _to_box(rect)
