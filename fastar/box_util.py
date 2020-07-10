@@ -57,7 +57,7 @@ def update_trie(trie, idxs):
   for idx in idxs:
     branch = trie
     for i in idx:
-      branch = branch[i] if i in branch else {}
+      branch = branch.setdefault(i, {})
 
 def _contains_rectangle(idx_trie, rectangle):
   """
