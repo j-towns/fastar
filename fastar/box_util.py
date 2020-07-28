@@ -50,9 +50,6 @@ def addbox(arr, box, val):
 def getbox(arr, box):
   return arr[box_to_slice(box)]
 
-def ndindex(starts, stops):
-  return product(*_map(range, starts, stops))
-
 def update_trie(trie, idxs):
   for idx in idxs:
     branch = trie

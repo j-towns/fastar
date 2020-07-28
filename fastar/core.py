@@ -19,11 +19,7 @@ UNKNOWN = 0
 REQUESTED = -1
 KNOWN = 1
 
-CACHE_SIZE = 128
-
 dependency_rules = {}
-
-class LazyError(Exception): pass
 
 class LazyArray(object):
   __slots__ = ['cache', 'state', 'eqn', 'var_idx', 'child_counts', '_aval',
@@ -31,7 +27,6 @@ class LazyArray(object):
 
   def __init__(self, var):
     self._aval = var.aval
-    cache_shape = [CACHE_SIZE if d is inf else d for d in self._aval.shape]
     self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
     self.state = np.zeros(var.aval.shape, int)
     self.child_counts = np.zeros(var.aval.shape, int)
@@ -79,7 +74,7 @@ class LazyArray(object):
       else:
         ustart, ushape = ubox
         instarts, counts, _ = dependency_rules[primitive](
-          ustart, Ones(ushape), *abstractify_lazy(invals), **params)
+          ustart, Ones(ushape), *invals, **params)
         for ival, istart, count in zip(invals, instarts, counts):
           if isinstance(ival, LazyArray) and istart is not None:
             ibox = istart, np.shape(count)
@@ -105,7 +100,7 @@ class LazyArray(object):
     start, shape = box
     invals, _, primitive, params, _ = arr.eqn
     instarts, counts, outslice_from_inslices = dependency_rules[primitive](
-      start, Ones(shape), *abstractify_lazy(invals), **params)
+      start, Ones(shape), *invals, **params)
     def update():
       if primitive.multiple_results:
         raise NotImplementedError
@@ -178,9 +173,6 @@ def lazy_eval_jaxpr(jaxpr, consts, *args):
 
 def get_aval(x):
   return x._aval if isinstance(x, LazyArray) else jc.get_aval(x)
-
-def abstractify_lazy(invals):
-  return [abstractify(x._aval) if isinstance(x, LazyArray) else x for x in invals]
 
 class Ones:
   def __init__(self, shape):
