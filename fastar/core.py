@@ -58,29 +58,27 @@ class LazyArray(object):
   def _compute_ancestral_child_counts(self, box):
     start, shape = box
     invals, _, primitive, params, _ = self.eqn
-    if self.shape:
-      local_state = getbox(self.state, box)
+    local_state = getbox(self.state, box)
+    if self.ndim > 0:
       update_trie(self.todo, np.add(start, np.argwhere(local_state == UNKNOWN)))
       uboxes = box_finder(self.todo)
-      setbox(self.state, box,
-             np.where(local_state == UNKNOWN, REQUESTED, local_state))
     else:
       uboxes = [([], [])] if self.state == UNKNOWN else []
-      self.state = np.array(REQUESTED) if self.state == UNKNOWN else self.state
+    setbox(self.state, box,
+           np.where(local_state == UNKNOWN, REQUESTED, local_state))
     for ubox in uboxes:
       if primitive.multiple_results:
         # TODO: pass var_idx to the dependency rule
         raise NotImplementedError
-      else:
-        ustart, ushape = ubox
-        instarts, counts, _ = dependency_rules[primitive](
-          ustart, Ones(ushape), *invals, **params)
-        for ival, istart, count in zip(invals, instarts, counts):
-          if isinstance(ival, LazyArray) and istart is not None:
-            ibox = istart, np.shape(count)
-            addbox(ival.child_counts,
-              ibox, materialize(count) * (getbox(ival.state, ibox) != KNOWN))
-            ival._compute_ancestral_child_counts(ibox)
+      ustart, ushape = ubox
+      instarts, counts, _ = dependency_rules[primitive](
+        ustart, Ones(ushape), *invals, **params)
+      for ival, istart, count in zip(invals, instarts, counts):
+        if isinstance(ival, LazyArray) and istart is not None:
+          ibox = istart, np.shape(count)
+          addbox(ival.child_counts,
+            ibox, materialize(count) * (getbox(ival.state, ibox) != KNOWN))
+          ival._compute_ancestral_child_counts(ibox)
 
   def _toposorted_updates(self, box) -> List[Callable[[], None]]:
     self._compute_ancestral_child_counts(box)
