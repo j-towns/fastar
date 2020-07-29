@@ -19,11 +19,7 @@ UNKNOWN = 0
 REQUESTED = -1
 KNOWN = 1
 
-CACHE_SIZE = 128
-
 dependency_rules = {}
-
-class LazyError(Exception): pass
 
 class LazyArray(object):
   __slots__ = ['cache', 'state', 'eqn', 'var_idx', 'child_counts', '_aval',
@@ -31,7 +27,6 @@ class LazyArray(object):
 
   def __init__(self, var):
     self._aval = var.aval
-    cache_shape = [CACHE_SIZE if d is inf else d for d in self._aval.shape]
     self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
     self.state = np.zeros(var.aval.shape, int)
     self.child_counts = np.zeros(var.aval.shape, int)
@@ -63,29 +58,27 @@ class LazyArray(object):
   def _compute_ancestral_child_counts(self, box):
     start, shape = box
     invals, _, primitive, params, _ = self.eqn
-    if self.shape:
-      local_state = getbox(self.state, box)
+    local_state = getbox(self.state, box)
+    if self.ndim > 0:
       update_trie(self.todo, np.add(start, np.argwhere(local_state == UNKNOWN)))
       uboxes = box_finder(self.todo)
-      setbox(self.state, box,
-             np.where(local_state == UNKNOWN, REQUESTED, local_state))
     else:
       uboxes = [([], [])] if self.state == UNKNOWN else []
-      self.state = np.array(REQUESTED) if self.state == UNKNOWN else self.state
+    setbox(self.state, box,
+           np.where(local_state == UNKNOWN, REQUESTED, local_state))
     for ubox in uboxes:
       if primitive.multiple_results:
         # TODO: pass var_idx to the dependency rule
         raise NotImplementedError
-      else:
-        ustart, ushape = ubox
-        instarts, counts, _ = dependency_rules[primitive](
-          ustart, Ones(ushape), *abstractify_lazy(invals), **params)
-        for ival, istart, count in zip(invals, instarts, counts):
-          if isinstance(ival, LazyArray) and istart is not None:
-            ibox = istart, np.shape(count)
-            addbox(ival.child_counts,
-              ibox, materialize(count) * (getbox(ival.state, ibox) != KNOWN))
-            ival._compute_ancestral_child_counts(ibox)
+      ustart, ushape = ubox
+      instarts, counts, _ = dependency_rules[primitive](
+        ustart, Ones(ushape), *invals, **params)
+      for ival, istart, count in zip(invals, instarts, counts):
+        if isinstance(ival, LazyArray) and istart is not None:
+          ibox = istart, np.shape(count)
+          addbox(ival.child_counts,
+            ibox, materialize(count) * (getbox(ival.state, ibox) != KNOWN))
+          ival._compute_ancestral_child_counts(ibox)
 
   def _toposorted_updates(self, box) -> List[Callable[[], None]]:
     self._compute_ancestral_child_counts(box)
@@ -96,44 +89,21 @@ class LazyArray(object):
             (local_child_counts == 0) & (getbox(self.state, box) != KNOWN), 1)]
     sorted_updates = []
     while childless_boxes:
-      self._process_childless_box(childless_boxes, sorted_updates)
+      arr, box = childless_boxes.pop()
+      update, instarts, counts = make_update_thunk(arr, box)
+      sorted_updates.append(update)
+      for ival, istart, count in zip(arr.eqn.invars, instarts, counts):
+        if isinstance(ival, LazyArray) and istart is not None:
+          ibox = istart, np.shape(count)
+          to_iglobal_coords = lambda b: (np.add(istart, b[0]), b[1])
+          addbox(ival.child_counts,
+            ibox, -materialize(count) * (getbox(ival.state, ibox) != KNOWN))
+          ilocal_child_counts = getbox(ival.child_counts, ibox)
+          childless_boxes.extend(
+            [(ival, to_iglobal_coords(b))
+             for b in static_box_finder((ilocal_child_counts == 0) &
+                                        (getbox(ival.state, ibox) != KNOWN), 1)])
     return sorted_updates[::-1]
-
-  def _process_childless_box(self, childless_boxes,
-                             sorted_updates: List[Callable[[], None]]):
-    arr, box = childless_boxes.pop()
-    start, shape = box
-    invals, _, primitive, params, _ = arr.eqn
-    instarts, counts, outslice_from_inslices = dependency_rules[primitive](
-      start, Ones(shape), *abstractify_lazy(invals), **params)
-    def update():
-      if primitive.multiple_results:
-        raise NotImplementedError
-      # TODO (j-towns): add option to disable this assert statement
-      # Check that none of this box has already been computed
-      assert np.all(getbox(arr.state, box) == REQUESTED), \
-        'Repeated computation detected'
-      invals_ = [val.cache if isinstance(val, LazyArray) else jnp.asarray(val)
-                 for val in invals]
-      inslices = [None if instart is None else
-                  lax.dynamic_slice(inval, tuple(instart), np.shape(count))
-                  for inval, instart, count in zip(invals_, instarts, counts)]
-      outslice = outslice_from_inslices(*inslices)
-      outstart, _ = box
-      arr.cache = lax.dynamic_update_slice(arr.cache, outslice, tuple(outstart))
-      setbox(arr.state, box, KNOWN)
-    sorted_updates.append(update)
-    for ival, istart, count in zip(invals, instarts, counts):
-      if isinstance(ival, LazyArray) and istart is not None:
-        ibox = istart, count.shape
-        to_iglobal_coords = lambda b: (np.add(istart, b[0]), b[1])
-        addbox(ival.child_counts,
-          ibox, -materialize(count) * (getbox(ival.state, ibox) != KNOWN))
-        ilocal_child_counts = getbox(ival.child_counts, ibox)
-        childless_boxes.extend(
-          [(ival, to_iglobal_coords(b))
-           for b in static_box_finder((ilocal_child_counts == 0) &
-                                      (getbox(ival.state, ibox) != KNOWN), 1)])
 
   def _getbox(self, box):
     assert np.shape(box) == (2, self.ndim)
@@ -148,6 +118,28 @@ class LazyArray(object):
           tuple(0 if i in int_dims else slice(None) for i in range(self.ndim))]
     else:
       return jnp.zeros(self.shape, self.dtype)
+
+def make_update_thunk(arr, box):
+  start, shape = box
+  invals, _, primitive, params, _ = arr.eqn
+  instarts, counts, outslice_from_inslices = dependency_rules[primitive](
+    start, Ones(shape), *invals, **params)
+  def thunk():
+    if primitive.multiple_results:
+      raise NotImplementedError
+    # TODO (j-towns): add option to disable this assert statement
+    assert np.all(getbox(arr.state, box) == REQUESTED), \
+      'Repeated computation detected'
+    invals_ = [val.cache if isinstance(val, LazyArray) else jnp.asarray(val)
+               for val in invals]
+    inslices = [None if instart is None else
+                lax.dynamic_slice(inval, tuple(instart), np.shape(count))
+                for inval, instart, count in zip(invals_, instarts, counts)]
+    outslice = outslice_from_inslices(*inslices)
+    outstart, _ = box
+    arr.cache = lax.dynamic_update_slice(arr.cache, outslice, tuple(outstart))
+    setbox(arr.state, box, KNOWN)
+  return thunk, instarts, counts
 
 def lazy_eval_jaxpr(jaxpr, consts, *args):
   def read(v):
@@ -178,9 +170,6 @@ def lazy_eval_jaxpr(jaxpr, consts, *args):
 
 def get_aval(x):
   return x._aval if isinstance(x, LazyArray) else jc.get_aval(x)
-
-def abstractify_lazy(invals):
-  return [abstractify(x._aval) if isinstance(x, LazyArray) else x for x in invals]
 
 class Ones:
   def __init__(self, shape):
