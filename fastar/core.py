@@ -5,9 +5,9 @@ import jax.core as jc
 from jax.lax.lax import Array
 from jax.util import safe_map, safe_zip
 from jax import lax
-from fastar.box_util import (
-  box_to_slice, slice_to_box, box_finder, static_box_finder, getbox, setbox,
-  addbox, update_trie)
+from fastar.box_util import (box_to_slice, slice_to_box, getbox, setbox,
+                             addbox)
+from fastar.box_finder import box_finder, static_box_finder
 from fastar.jaxpr_util import Literal_, inf, abstractify
 import numpy as np
 
@@ -30,7 +30,6 @@ class LazyArray(object):
     self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
     self.state = np.zeros(var.aval.shape, int)
     self.child_counts = np.zeros(var.aval.shape, int)
-    self.todo = {}
     self.eqn = None
     self.var_idx = None
 
@@ -59,18 +58,13 @@ class LazyArray(object):
     start, shape = box
     invals, _, primitive, params, _ = self.eqn
     local_state = getbox(self.state, box)
-    if self.ndim > 0:
-      update_trie(self.todo, np.add(start, np.argwhere(local_state == UNKNOWN)))
-      uboxes = box_finder(self.todo)
-    else:
-      uboxes = [([], [])] if self.state == UNKNOWN else []
-    setbox(self.state, box,
-           np.where(local_state == UNKNOWN, REQUESTED, local_state))
+    uboxes = box_finder(local_state, UNKNOWN, REQUESTED)
     for ubox in uboxes:
       if primitive.multiple_results:
         # TODO: pass var_idx to the dependency rule
         raise NotImplementedError
       ustart, ushape = ubox
+      ustart = np.add(start, ustart)
       instarts, counts, _ = dependency_rules[primitive](
         ustart, Ones(ushape), *invals, **params)
       for ival, istart, count in zip(invals, instarts, counts):
@@ -86,7 +80,7 @@ class LazyArray(object):
     local_child_counts = getbox(self.child_counts, box)
     childless_boxes = [
         (self, to_global_coords(b)) for b in static_box_finder(
-            (local_child_counts == 0) & (getbox(self.state, box) != KNOWN), 1)]
+            (local_child_counts == 0) & (getbox(self.state, box) != KNOWN))]
     sorted_updates = []
     while childless_boxes:
       arr, box = childless_boxes.pop()
@@ -102,7 +96,7 @@ class LazyArray(object):
           childless_boxes.extend(
             [(ival, to_iglobal_coords(b))
              for b in static_box_finder((ilocal_child_counts == 0) &
-                                        (getbox(ival.state, ibox) != KNOWN), 1)])
+                                        (getbox(ival.state, ibox) != KNOWN))])
     return sorted_updates[::-1]
 
   def _getbox(self, box):

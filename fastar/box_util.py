@@ -48,77 +48,9 @@ def addbox(arr, box, val):
   arr[box_to_slice(box)] += val
 
 def getbox(arr, box):
-  return arr[box_to_slice(box)]
-
-def update_trie(trie, idxs):
-  for idx in idxs:
-    branch = trie
-    for i in idx:
-      branch = branch.setdefault(i, {})
-
-def _contains_rectangle(idx_trie, rectangle):
-  """
-  Return True if rectangle is contained in idx_trie, else False.
-  """
-  (start, stop), rectangle = rectangle
-  return all(
-    n in idx_trie
-    and (not rectangle or _contains_rectangle(idx_trie[n], rectangle))
-    for n in range(start, stop))
-
-def _remove_rectangle(idx_trie, rectangle):
-  (start, stop), rectangle = rectangle
-  for root in list(idx_trie):
-    if start <= root < stop:
-      if rectangle:
-        _remove_rectangle(idx_trie[root], rectangle)
-      if not idx_trie[root]:
-        del idx_trie[root]
-
-def _find_rectangle(idx_trie):
-  """
-  Greedily find a rectangle in idx_trie.
-  """
-  start = min(idx_trie)
-  stop = start + 1
-  branch = idx_trie[start]
-  if branch:
-    rect = _find_rectangle(branch)
-    while stop in idx_trie and _contains_rectangle(idx_trie[stop], rect):
-      stop += 1
-    return (start, stop), rect
+  if arr.ndim > 0:
+    return arr[box_to_slice(box)]
   else:
-    while stop in idx_trie:
-      stop += 1
-    return (start, stop), ()
-
-def _to_box(rectangle):
-  starts = []
-  shape = []
-  while rectangle:
-    (start, stop), rectangle = rectangle
-    starts.append(start)
-    shape.append(stop - start)
-  return starts, shape
-
-def static_box_finder(arr, val=0):
-  """
-  Greedily search for boxes in arr.
-  """
-  if np.shape(arr) == ():
-    return [([], [])] if arr else []
-
-  rectangles = []
-  idx_trie = {}
-  update_trie(idx_trie, np.argwhere(arr == val))
-  while idx_trie:
-    rect = _find_rectangle(idx_trie)
-    rectangles.append(rect)
-    _remove_rectangle(idx_trie, rect)
-  return map(_to_box, rectangles)
-
-def box_finder(idx_trie):
-  while idx_trie:
-    rect = _find_rectangle(idx_trie)
-    _remove_rectangle(idx_trie, rect)
-    yield _to_box(rect)
+    # Indexing a scalar array results in a copy, which we don't want
+    assert box_to_slice(box) == ()
+    return arr
