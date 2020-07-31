@@ -85,7 +85,7 @@ LAX_OPS = [
               {np.float32: 1e-3 if jtu.device_under_test() == "tpu" else 1e-5,
                np.float64: 1e-14}),
     op_record("digamma", 1, float_dtypes, jtu.rand_positive,
-              {np.float64: 1e-14}),
+              {np.float32: 1e-5, np.float64: 1e-14}),
     op_record("betainc", 3, float_dtypes, jtu.rand_positive,
               {np.float64: 1e-14}),
     op_record("igamma", 2,
@@ -149,7 +149,7 @@ def test_nary(op_name, rng_factory, shapes, dtype, tol):
   tu.check_lazy_fun(getattr(lax, op_name), *args, atol=tol, rtol=tol)
 
 LAX_REDUCE_OPS = [
-  op_record("_reduce_sum", 1, number_dtypes, jtu.rand_default),
+  op_record("_reduce_sum", 1, number_dtypes, jtu.rand_default, tol=.01),
   op_record("_reduce_prod", 1, number_dtypes, jtu.rand_small_positive),
   op_record("_reduce_max", 1, all_dtypes, jtu.rand_default),
   op_record("_reduce_min", 1, all_dtypes, jtu.rand_default),
@@ -257,7 +257,7 @@ def test_rev(shape, dtype, dimensions, rng_factory):
 def test_dot(lhs_shape, rhs_shape, dtype, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
-  tu.check_lazy_fun(lax.dot, *args)
+  tu.check_lazy_fun(lax.dot, *args, rtol=.1)
 
 @pytest.mark.parametrize(
   'lhs_shape,rhs_shape,dimension_numbers,dtype,rng_factory',
@@ -270,7 +270,7 @@ def test_dot(lhs_shape, rhs_shape, dtype, rng_factory):
 def test_dot_general_contract_and_batch(lhs_shape, rhs_shape, dimension_numbers, dtype, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
-  tu.check_lazy_fun(partial(lax.dot_general, dimension_numbers=dimension_numbers), *args, atol=1e-5)
+  tu.check_lazy_fun(partial(lax.dot_general, dimension_numbers=dimension_numbers), *args, rtol=.1, atol=1e-5)
 
 @pytest.mark.parametrize(
   'lhs_shape,rhs_shape,dtype,lhs_contracting,rhs_contracting,rng_factory',
@@ -290,7 +290,7 @@ def test_dot_general_contract_only(
   rng = rng_factory(np.random)
   args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
   dimension_numbers = ((lhs_contracting, rhs_contracting), ((), ()))
-  tu.check_lazy_fun(partial(lax.dot_general, dimension_numbers=dimension_numbers), *args, atol=1e-5)
+  tu.check_lazy_fun(partial(lax.dot_general, dimension_numbers=dimension_numbers), *args, rtol=.1, atol=1e-5)
 
 @pytest.mark.parametrize(
   'shape,dtype,starts,limits,strides,rng_factory',

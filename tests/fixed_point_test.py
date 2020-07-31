@@ -1,3 +1,4 @@
+from pytest import skip
 from jax import test_util as jtu, numpy as np, lax, vmap
 
 from fastar import test_util as tu, lazy_eval_fixed_point
@@ -21,6 +22,7 @@ def test_fixedpoint_2d():
   tu.check_lazy_fixed_point(fixed_point, x_mock)
 
 def test_fixedpoint_vmap():
+  skip("TODO implement scatter numpy_eval rule for _dynamic_update_slice_batching_rule")
   def elem(y):
     def fixed_point(x):
       return np.concatenate([np.array([1.]), 2 * lax.slice(x + y, [0], [3])])
