@@ -65,11 +65,10 @@ class LazyArray(object):
         raise NotImplementedError
       ustart, ushape = ubox
       ustart = np.add(start, ustart)
-      instarts, counts, _ = dependency_rules[primitive](
+      inboxes, counts, _ = dependency_rules[primitive](
         ustart, Ones(ushape), *invals, **params)
-      for ival, istart, count in zip(invals, instarts, counts):
-        if isinstance(ival, LazyArray) and istart is not None:
-          ibox = istart, np.shape(count)
+      for ival, ibox, count in zip(invals, inboxes, counts):
+        if isinstance(ival, LazyArray) and ibox is not None:
           addbox(ival.child_counts,
             ibox, materialize(count) * (getbox(ival.state, ibox) != KNOWN))
           ival._compute_ancestral_child_counts(ibox)
@@ -84,12 +83,11 @@ class LazyArray(object):
     sorted_updates = []
     while childless_boxes:
       arr, box = childless_boxes.pop()
-      update, instarts, counts = make_update_thunk(arr, box)
+      update, inboxes, counts = make_update_thunk(arr, box)
       sorted_updates.append(update)
-      for ival, istart, count in zip(arr.eqn.invars, instarts, counts):
-        if isinstance(ival, LazyArray) and istart is not None:
-          ibox = istart, np.shape(count)
-          to_iglobal_coords = lambda b: (np.add(istart, b[0]), b[1])
+      for ival, ibox, count in zip(arr.eqn.invars, inboxes, counts):
+        if isinstance(ival, LazyArray) and ibox is not None:
+          to_iglobal_coords = lambda b: (np.add(ibox[0], b[0]), b[1])
           addbox(ival.child_counts,
             ibox, -materialize(count) * (getbox(ival.state, ibox) != KNOWN))
           ilocal_child_counts = getbox(ival.child_counts, ibox)
@@ -117,7 +115,7 @@ class LazyArray(object):
 def make_update_thunk(arr, box):
   start, shape = box
   invals, _, primitive, params, _ = arr.eqn
-  instarts, counts, outslice_from_inslices = dependency_rules[primitive](
+  inboxes, counts, outslice_from_inslices = dependency_rules[primitive](
     start, Ones(shape), *invals, **params)
   def thunk():
     if primitive.multiple_results:
@@ -127,14 +125,14 @@ def make_update_thunk(arr, box):
       'Repeated computation detected'
     invals_ = [val.cache if isinstance(val, LazyArray) else jnp.asarray(val)
                for val in invals]
-    inslices = [None if instart is None else
-                lax.slice(inval, instart, np.array(instart) + np.shape(count))
-                for inval, instart, count in zip(invals_, instarts, counts)]
+    inslices = [None if ibox is None else
+                lax.slice(inval, ibox[0], np.add(ibox[0], ibox[1]))
+                for inval, ibox, count in zip(invals_, inboxes, counts)]
     outslice = outslice_from_inslices(*inslices)
     outstart, _ = box
     arr.cache = inplace_dynamic_update_slice(arr.cache, outslice, outstart)
     setbox(arr.state, box, KNOWN)
-  return thunk, instarts, counts
+  return thunk, inboxes, counts
 
 def lazy_eval_jaxpr(jaxpr, consts, *args):
   def read(v):
