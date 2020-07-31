@@ -170,7 +170,7 @@ def slice_dependency_rule(
     strides = np.asarray(strides)
     inbox = (start_indices + outstart * strides, (out_shape - 1) * strides + 1)
     count = np.zeros(inbox[1], int)
-    count_slice = [slice(None, None, s) for s in strides]
+    count_slice = tuple(slice(None, None, s) for s in strides)
     count[count_slice] = 1
     return ([inbox], [count],
             lambda inslice: lax.slice(inslice, np.zeros_like(strides),
