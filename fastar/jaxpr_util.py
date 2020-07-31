@@ -101,7 +101,7 @@ def fastar_jaxpr(flat_fun, *args_flat):
   in_avals = map(abstractify, args_flat)
   in_pvals = map(pe.PartialVal.unknown, in_avals)
   jaxpr, out_pvals, consts = pe.trace_to_jaxpr(
-      flat_fun, in_pvals, instantiate=True, stage_out=True)
+      flat_fun, in_pvals, instantiate=True)
   out_avals = [v.get_aval() for v in out_pvals]
   return TypedJaxpr(refresh_names(inline_calls(submerge_consts(jaxpr, consts))),
                     [], in_avals, out_avals)

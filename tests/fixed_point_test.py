@@ -1,11 +1,6 @@
-import fastar.test_util as tu
-from fastar import lazy_eval_fixed_point
+from jax import test_util as jtu, numpy as np, lax, vmap
 
-import jax.numpy as np
-import jax.test_util as jtu
-from jax import lax
-import jax
-
+from fastar import test_util as tu, lazy_eval_fixed_point
 
 def test_fixedpoint_simple():
   def fixed_point(x):
@@ -33,5 +28,5 @@ def test_fixedpoint_vmap():
 
   ys = np.array([1, 2, 3, 4])
   expected = np.array([elem(y) for y in ys])
-  actual = jax.vmap(elem)(ys)
+  actual = vmap(elem)(ys)
   jtu.check_close(expected, actual)

@@ -8,12 +8,6 @@ from fastar.jaxpr_util import abstractify
 map = safe_map
 zip = safe_zip
 
-def tie_in_dependency_rule(outstart, outcount, x, y):
-  return ([None, outstart], [None, outcount],
-          lambda _, y_slice: lax.tie_in(x, y_slice))
-
-dependency_rules[lax.tie_in_p] = tie_in_dependency_rule
-
 @curry
 def naryop_dependency_rule(prim, outstart, outcount, *operands, **params):
   if not is_ones(outcount):

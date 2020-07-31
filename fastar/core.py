@@ -1,15 +1,14 @@
 from typing import Callable, List, Union
-
-import jax.numpy as jnp
+import numpy as np
 import jax.core as jc
 from jax.lax.lax import Array
 from jax.util import safe_map, safe_zip
-from jax import lax
+from jax import lax, numpy as jnp
+
 from fastar.box_util import (box_to_slice, slice_to_box, getbox, setbox,
                              addbox)
 from fastar.box_finder import box_finder, static_box_finder
-from fastar.jaxpr_util import Literal_, inf, abstractify
-import numpy as np
+from fastar.jaxpr_util import Literal_
 
 
 map = safe_map

@@ -5,11 +5,9 @@ from functools import partial
 import pytest
 import numpy as np
 
-from jax import dtypes, jit, custom_jvp
-import jax.test_util as jtu
-from jax import lax
+from jax import dtypes, jit, custom_jvp, lax, test_util as jtu
 
-import fastar.test_util as tu
+from fastar import test_util as tu
 from fastar.core import Ones
 from fastar.rules import conv_incounts, pad_dependency_rule
 

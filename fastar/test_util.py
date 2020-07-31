@@ -1,11 +1,11 @@
 from itertools import chain
 from random import shuffle
 import numpy as np
-from jax import lax, numpy as jnp, test_util as jtu
+from jax import numpy as jnp, test_util as jtu
 from jax.util import safe_map, safe_zip
 from jax.tree_util import tree_multimap, tree_flatten, tree_map
 
-from fastar import core, lazy_eval, lazy_eval_fixed_point, LazyArray
+from fastar import lazy_eval, lazy_eval_fixed_point, LazyArray
 
 map = safe_map
 zip = safe_zip
@@ -45,7 +45,7 @@ def check_state(arrs):
   _check_state(arrs)
 
 def _identity(x):
-  return lax.tie_in(x, x)
+  return x + np.zeros((), x.dtype)
 
 def check_lazy_fun(fun_, *args, atol=None, rtol=None):
   def fun(*args):
