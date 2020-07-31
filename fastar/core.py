@@ -126,7 +126,7 @@ def make_update_thunk(arr, box):
     invals_ = [val.cache if isinstance(val, LazyArray) else jnp.asarray(val)
                for val in invals]
     inslices = [None if instart is None else
-                lax.dynamic_slice(inval, tuple(instart), np.shape(count))
+                lax.slice(inval, instart, np.array(instart) + np.shape(count))
                 for inval, instart, count in zip(invals_, instarts, counts)]
     outslice = outslice_from_inslices(*inslices)
     outstart, _ = box
