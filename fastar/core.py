@@ -10,7 +10,7 @@ from fastar.box_util import (box_to_slice, slice_to_box, getbox, setbox,
                              addbox)
 from fastar.box_finder import box_finder, static_box_finder
 from fastar.jaxpr_util import Literal_
-
+from fastar.numpy_eval_util import inplace_dynamic_update_slice
 
 map = safe_map
 zip = safe_zip
@@ -132,7 +132,7 @@ def make_update_thunk(arr, box):
                 for inval, instart, count in zip(invals_, instarts, counts)]
     outslice = outslice_from_inslices(*inslices)
     outstart, _ = box
-    arr.cache = lax.dynamic_update_slice(arr.cache, outslice, tuple(outstart))
+    arr.cache = inplace_dynamic_update_slice(arr.cache, outslice, outstart)
     setbox(arr.state, box, KNOWN)
   return thunk, instarts, counts
 
