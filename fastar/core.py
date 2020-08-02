@@ -105,7 +105,7 @@ class LazyArray(object):
       update()
     return self.cache[box_to_slice(box)]
 
-  @numpy_eval
+  @numpy_eval()
   def __getitem__(self, idx):
     if self.size:
       box, int_dims = slice_to_box(self.shape, idx)
