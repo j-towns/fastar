@@ -16,13 +16,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-    - name: Set up Python 3.8
-      uses: actions/setup-python@v2
+    - name: Set up Python 3.8 with miniconda
+      uses: goanpeca/setup-miniconda@v1
       with:
+        auto-update-conda: true
         python-version: 3.8
     - name: Install dependencies
       run: |
-        conda update --yes conda
         conda config --add channels conda-forge
         conda install --yes python=$TRAVIS_PYTHON_VERSION pip six protobuf>=3.6.0 absl-py opt_einsum numpy scipy numba
         pip install pytest pytest-xdist pytest-benchmark jaxlib
