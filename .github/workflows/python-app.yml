@@ -26,6 +26,7 @@ jobs:
         conda config --add channels conda-forge
         conda install --yes python=$TRAVIS_PYTHON_VERSION pip six protobuf>=3.6.0 absl-py opt_einsum numpy scipy numba
         pip install pytest pytest-xdist pytest-benchmark jaxlib
+        pip install git+https://github.com/JuliusKunze/jax.git@numpy-interpreter
     - name: Test with pytest
       run: |
         pytest -n auto tests
