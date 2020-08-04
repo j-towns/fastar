@@ -363,9 +363,9 @@ def test_pad(shape, dtype, padding_config, rng_factory):
    for rng_factory in [jtu.rand_small]])
 def test_conv(lhs_shape, rhs_shape, dtype, strides, padding, rng_factory):
   rng = rng_factory(np.random)
-  lhs, rhs = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
-  fun = lambda lhs: lax.conv(lhs, rhs, strides, padding)
-  tu.check_lazy_fun(fun, lhs)
+  args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
+  fun = lambda lhs, rhs: lax.conv(lhs, rhs, strides, padding)
+  tu.check_lazy_fun(fun, *args)
 
 @pytest.mark.parametrize(
   'lhs_shape,rhs_shape,dtype,strides,padding,lhs_dilation,rhs_dilation,'
@@ -395,14 +395,14 @@ def test_conv_general_dilated(lhs_shape, rhs_shape, dtype, strides,
                               dimension_numbers, perms, rng_factory):
   rng = rng_factory(np.random)
   lhs_perm, rhs_perm = perms  # permute to compatible shapes
-  lhs, rhs = (lax.transpose(rng(lhs_shape, dtype), lhs_perm),
-              lax.transpose(rng(rhs_shape, dtype), rhs_perm))
-  def fun(lhs):
+  args = [lax.transpose(rng(lhs_shape, dtype), lhs_perm),
+          lax.transpose(rng(rhs_shape, dtype), rhs_perm)]
+  def fun(lhs, rhs):
     return lax.conv_general_dilated(
       lhs, rhs, strides, padding, lhs_dilation, rhs_dilation,
       dimension_numbers, feature_group_count=feature_group_count,
       batch_group_count=batch_group_count)
-  tu.check_lazy_fun(fun, lhs, rtol=.005, atol=.2)
+  tu.check_lazy_fun(fun, *args, rtol=.005, atol=.2)
 
 def test_conv_incounts():
   rhs_shape = (4, 1, 2, 3)
@@ -412,16 +412,14 @@ def test_conv_incounts():
     [2, 4, 6, 6, 6, 4, 2],
     [1, 2, 3, 3, 3, 2, 1]
   ]]]), lhs_count)
-  # rhs count not implemented
-  # np.testing.assert_array_equal(np.full(rhs_shape, 8), rhs_count)
+  np.testing.assert_array_equal(np.full(rhs_shape, 8), rhs_count)
 
 def test_conv_incounts_strided():
   rhs_shape = (1, 1, 7)
   lhs_count, rhs_count = conv_incounts((1, 1, 21), rhs_shape, (3,))
   np.testing.assert_array_equal(
     [[[1, 1, 1, 2, 2, 2, 3, 2, 2, 3, 2, 2, 3, 2, 2, 2, 1, 1, 1, 0, 0]]], lhs_count)
-  # rhs count not implemented
-  # np.testing.assert_array_equal(np.ones(rhs_shape), rhs_count)
+  np.testing.assert_array_equal(np.ones(rhs_shape), rhs_count)
 
 @pytest.mark.parametrize(
   'outstart,outcount,expected_incount',

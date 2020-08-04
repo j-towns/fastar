@@ -289,7 +289,7 @@ def conv_incounts(lhs_shape, rhs_shape, window_strides):
     single_dim_counts.append(np.sum(counts, axis=0))
   lhs_count = np.broadcast_to(
     outer_product(single_dim_counts) * outchan, lhs_shape)
-  return lhs_count, None
+  return lhs_count, np.full(rhs_shape, batch_size)
 
 def conv_dependency_rule(outstart, outcount, lhs, rhs, window_strides, precision):
   if not is_ones(outcount):
@@ -312,8 +312,6 @@ def conv_dependency_rule(outstart, outcount, lhs, rhs, window_strides, precision
 def conv_general_dilated_dependency_rule(
     outstart, outcount, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
     dimension_numbers, feature_group_count, batch_group_count, precision, **_):
-  if isinstance(rhs, LazyArray):
-    raise NotImplementedError
   if not is_ones(outcount):
     raise NotImplementedError
   if feature_group_count > 1 or batch_group_count > 1:
@@ -339,8 +337,8 @@ def conv_general_dilated_dependency_rule(
     (l_box,), (lhs_count,), lhs_transpose = transpose_dependency_rule(
       l_start, lhs_count, None, lhs_spec)
   (r_box,), (rhs_count,), rhs_transpose = transpose_dependency_rule(
-    r_start, Ones(r_shape), None, rhs_spec)
-  return ([l_box, r_box], [lhs_count, None],
+    r_start, rhs_count, None, rhs_spec)
+  return ([l_box, r_box], [lhs_count, rhs_count],
           lambda lhs_slice, rhs_slice: out_transpose(conv(
             lhs_pad(None if lhs_slice is None else lhs_transpose(lhs_slice),
                     np.zeros((), lhs.dtype)),
