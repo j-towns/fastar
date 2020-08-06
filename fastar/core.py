@@ -4,7 +4,6 @@ import jax.core as jc
 from jax.lax.lax import Array
 from jax.util import safe_map, safe_zip
 from jax import lax, numpy as jnp
-from jax.interpreters.numpy_eval import numpy_eval
 
 from fastar.box_util import (box_to_slice, slice_to_box, getbox, setbox,
                              addbox)
@@ -27,7 +26,7 @@ class LazyArray(object):
 
   def __init__(self, var):
     self._aval = var.aval
-    self.cache = np.zeros(var.aval.shape, var.aval.dtype)
+    self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
     self.state = np.zeros(var.aval.shape, int)
     self.child_counts = np.zeros(var.aval.shape, int)
     self.eqn = None
@@ -103,7 +102,6 @@ class LazyArray(object):
       update()
     return self.cache[box_to_slice(box)]
 
-  @numpy_eval()
   def __getitem__(self, idx):
     if self.size:
       box, int_dims = slice_to_box(self.shape, idx)
