@@ -57,10 +57,8 @@ def toposort(jaxpr):
   for o in jaxpr.outvars:
     childless_boxes[o] = static_box_finder(child_counts[o], 0)
   outvars = [(e, o) for e in reversed(jaxpr.eqns) for o in e.outvars]
-  # from IPython.terminal.debugger import set_trace; set_trace()
   while childless_boxes:
     for e, o in outvars:
-      # from IPython.terminal.debugger import set_trace; set_trace()
       childless = childless_boxes[o]
       del childless_boxes[o]
       sorted_boxes[o].append(childless)
@@ -83,44 +81,6 @@ def toposort(jaxpr):
                for b in static_box_finder((ilocal_child_counts == 0))])
   return sorted_boxes
 
-#   def _toposorted_updates(self, box) -> List[Callable[[], None]]:
-#     self._compute_ancestral_child_counts(box)
-#     to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
-#     local_child_counts = getbox(self.child_counts, box)
-#     childless_boxes = [
-#         (self, to_global_coords(b)) for b in static_box_finder(
-#             (local_child_counts == 0) & (getbox(self.state, box) != KNOWN))]
-#     sorted_updates = []
-#     while childless_boxes:
-#       arr, box = childless_boxes.pop()
-#       update, inboxes, counts = make_update_thunk(arr, box)
-#       sorted_updates.append(update)
-#       for ival, ibox, count in zip(arr.eqn.invars, inboxes, counts):
-#         if isinstance(ival, LazyArray) and ibox is not None:
-#           to_iglobal_coords = lambda b: (np.add(ibox[0], b[0]), b[1])
-#           addbox(ival.child_counts,
-#             ibox, -materialize(count) * (getbox(ival.state, ibox) != KNOWN))
-#           ilocal_child_counts = getbox(ival.child_counts, ibox)
-#           childless_boxes.extend(
-#             [(ival, to_iglobal_coords(b))
-#              for b in static_box_finder((ilocal_child_counts == 0) &
-#                                         (getbox(ival.state, ibox) != KNOWN))])
-#     return sorted_updates[::-1]
-# 
-#   def _getbox(self, box):
-#     assert np.shape(box) == (2, self.ndim)
-#     for update in self._toposorted_updates(box):
-#       update()
-#     return self.cache[box_to_slice(box)]
-# 
-#   def __getitem__(self, idx):
-#     if self.size:
-#       box, int_dims = slice_to_box(self.shape, idx)
-#       return self._getbox(box)[
-#           tuple(0 if i in int_dims else slice(None) for i in range(self.ndim))]
-#     else:
-#       return jnp.zeros(self.shape, self.dtype)
-# 
 # def make_update_thunk(arr, box):
 #   start, shape = box
 #   invals, _, primitive, params, _ = arr.eqn
