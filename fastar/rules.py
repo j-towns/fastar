@@ -3,7 +3,7 @@ import numpy as np
 from jax import numpy as jnp, lax, lax_reference as laxref, ShapedArray
 from jax.util import safe_map, safe_zip, curry, unzip2, prod, unzip3
 
-from fastar.core import dependency_rules, Ones, is_ones, materialize, LazyArray
+from fastar.core import dependency_rules, Ones, is_ones, materialize
 from fastar.jaxpr_util import abstractify
 
 map = safe_map
@@ -18,7 +18,6 @@ def naryop_dependency_rule(prim, outstart, outcount, *operands, **params):
              if len(b) else ([], []) for b in bdcast]
   incounts = [(np.full(inshape, prod(np.where(b, outcount.shape, 1)))
                if len(b) else prod(outcount.shape))
-              if isinstance(o, LazyArray) else None
               for o, b, (_, inshape) in zip(operands, bdcast, inboxes)]
   return inboxes, incounts, lambda *inslices: prim.bind(*inslices, **params)
 
@@ -164,7 +163,7 @@ def slice_dependency_rule(
     outstart, outcount, operand, start_indices, limit_indices, strides):
   out_shape = np.asarray(outcount.shape)
   if strides is None:
-    inbox = start_indices + outstart, out_shape
+    inbox = np.add(start_indices, outstart), out_shape
     return [inbox], [np.ones(inbox[1], int)], lambda inslice: inslice
   else:
     strides = np.asarray(strides)
@@ -234,11 +233,9 @@ def dot_general_dependency_rule(
   (rhs_box,), (rhs_count,), _ = reduce_dependency_rule(None)(
       rhs_outstart, Ones(rhs_outshape), rhs, axes=rhs_contracting)
   incounts = [materialize(lhs_count)
-              * prod(np.take(outshape, rhs_other_out_dims))
-              if isinstance(lhs, LazyArray) else None,
+              * prod(np.take(outshape, rhs_other_out_dims)),
               materialize(rhs_count)
-              * prod(np.take(outshape, lhs_other_out_dims))
-              if isinstance(rhs, LazyArray) else None]
+              * prod(np.take(outshape, lhs_other_out_dims))]
   return ([lhs_box, rhs_box], incounts,
           lambda *inslices: lax.dot_general(
               *inslices, dimension_numbers, precision))
