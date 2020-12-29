@@ -3,7 +3,8 @@ import numpy as np
 from jax import numpy as jnp, lax, lax_reference as laxref, ShapedArray
 from jax.util import safe_map, safe_zip, curry, unzip2, prod, unzip3
 
-from fastar.core import dependency_rules, Ones, is_ones, materialize
+from fastar.core import (dependency_rules, meta_argmakers, updaters, Ones,
+                         is_ones, materialize)
 from fastar.jaxpr_util import abstractify
 
 map = safe_map
@@ -19,7 +20,24 @@ def naryop_dependency_rule(prim, outstart, outcount, *operands, **params):
   incounts = [(np.full(inshape, prod(np.where(b, outcount.shape, 1)))
                if len(b) else prod(outcount.shape))
               for o, b, (_, inshape) in zip(operands, bdcast, inboxes)]
-  return inboxes, incounts, lambda *inslices: prim.bind(*inslices, **params)
+  return inboxes, incounts # , lambda *inslices: prim.bind(*inslices, **params)
+
+@curry
+def naryop_meta_maker(prim, outbox, *operands, **params):
+  outstart, outshape = outbox
+  inboxes, _ = naryop_dependency_rule(prim)(
+      outstart, Ones(outshape), *operands, **params)
+  instarts, inshapes = unzip2(inboxes)
+  return map(tuple, inshapes), (outstart, instarts)
+
+@curry
+def naryop_updater(prim, meta_static, meta_dyn, old_out, *operands, **params):
+  insizes = meta_static
+  outstart, instarts = meta_dyn
+  operands = [lax.dynamic_slice(o, start, size)
+              for o, start, size in zip(operands, instarts, insizes)]
+  return lax.dynamic_update_slice(
+      old_out, prim.bind(*operands, **params), outstart)
 
 naryops = [
     lax.convert_element_type_p,
@@ -89,6 +107,8 @@ naryops = [
 
 for op in naryops:
   dependency_rules[op] = naryop_dependency_rule(op)
+  meta_argmakers[op] = naryop_meta_maker(op)
+  updaters[op] = naryop_updater(op)
 
 @curry
 def reduce_dependency_rule(prim, outstart, outcount, operand, axes, **kwargs):
