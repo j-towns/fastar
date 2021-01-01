@@ -1,36 +1,56 @@
+from dataclasses import dataclass
+from typing import Any
+
 import numpy as np
 
 from jax import (ShapedArray, abstract_arrays, dtypes, core as jc,
                  linear_util as lu)
 from jax.util import safe_map, safe_zip
-from jax.core import Literal, Jaxpr, JaxprEqn, Var, ClosedJaxpr
+from jax.core import (Literal, Jaxpr, JaxprEqn, Var, ClosedJaxpr,
+                      pytype_aval_mappings)
 from jax.interpreters import xla, partial_eval as pe
+from jax.abstract_arrays import ShapedArray
 from functools import partial
 
 map = safe_map
 zip = safe_zip
 
+@dataclass
+class DelayedArray:
+  shape: Any
+  dtype: Any
+  parent: Any
+pytype_aval_mappings[DelayedArray] = lambda d: ShapedArray(d.shape, d.dtype)
+
 def abstractify(x):
   return ShapedArray(np.shape(x), dtypes.result_type(x))
 
-def fastar_jaxpr(flat_fun, *args_flat):
-  in_avals = map(abstractify, args_flat)
-  jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(flat_fun, in_avals)
+def fastar_jaxpr(flat_thunk):
+  jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(flat_thunk, [])
   return ClosedJaxpr(inline_calls(jaxpr), consts)
 
-def tie_the_knot(jaxpr):
-  """
-  Assuming jaxpr.in_avals == jaxpr.out_avals, replace references to any of
-  jaxpr's invars with the corresponding outvar.
-  """
-  assert tuple(jaxpr.in_avals) == tuple(jaxpr.out_avals)
+def tie_the_knot(jaxpr, result):
+  assert tuple(jaxpr.out_avals) == (ShapedArray(result.shape_dtype.shape,
+                                                result.shape_dtype.dtype),)
   j = jaxpr.jaxpr
-  in2out = dict(zip(j.invars, j.outvars))
-  replace = lambda v: in2out.get(v, v) if isinstance(v, Var) else v
+  result_var, = j.outvars
+  replace_vars = []
+  constvars = []
+  consts = []
+  for v, c in zip(j.constvars, jaxpr.consts):
+    if isinstance(c, DelayedArray):
+      assert c.parent is result
+      replace_vars.append(v)
+    else:
+      constvars.append(v)
+      consts.append(c)
+  replace_vars = set(replace_vars)
+  replace = lambda v: (
+      result_var if (isinstance(v, Var) and v in replace_vars) else v)
   return ClosedJaxpr(
-      Jaxpr(j.constvars, [], j.outvars, [JaxprEqn(
+      Jaxpr(constvars, [], j.outvars, [JaxprEqn(
           *([replace(i) for i in e.invars],) + e[1:]) for e in j.eqns]),
-      jaxpr.consts)
+      consts)
 
 def inline_calls(jaxpr):
   new_eqns = []

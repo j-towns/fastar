@@ -1,6 +1,8 @@
 from itertools import chain
 import numpy as np
-from jax import numpy as jnp, lax, lax_reference as laxref, ShapedArray
+from jax import lax, ShapedArray
+import jax.lax_reference as laxref
+import jax.numpy as jnp
 from jax.util import safe_map, safe_zip, curry, unzip2, prod, unzip3
 
 from fastar.core import (dependency_rules, meta_argmakers, updaters, Ones,
@@ -9,6 +11,14 @@ from fastar.jaxpr_util import abstractify
 
 map = safe_map
 zip = safe_zip
+
+def updater_wrapper(f):
+  def updater(meta_static):
+    def inner(rest):
+      meta_dyn, old_out, args = rest
+      return f(meta_static, meta_dyn, old_out, *args)
+    return inner
+  return updater
 
 @curry
 def naryop_dependency_rule(prim, outstart, outcount, *operands, **params):
@@ -20,22 +30,31 @@ def naryop_dependency_rule(prim, outstart, outcount, *operands, **params):
   incounts = [(np.full(inshape, prod(np.where(b, outcount.shape, 1)))
                if len(b) else prod(outcount.shape))
               for o, b, (_, inshape) in zip(operands, bdcast, inboxes)]
-  return inboxes, incounts # , lambda *inslices: prim.bind(*inslices, **params)
+  return inboxes, incounts
 
 @curry
 def naryop_meta_maker(prim, outbox, *operands, **params):
   outstart, outshape = outbox
+  if outstart is None:
+    out_ndim = outshape
+    in_ndims = map(np.ndim, operands)
+    return None, (jnp.zeros(out_ndim, int),
+                  [jnp.zeros(d, int) for d in in_ndims])
   inboxes, _ = naryop_dependency_rule(prim)(
       outstart, Ones(outshape), *operands, **params)
   instarts, inshapes = unzip2(inboxes)
-  return map(tuple, inshapes), (outstart, instarts)
+  return ((tuple(map(tuple, inshapes)), tuple(params.items())),
+          (jnp.array(outstart), [jnp.array(s, int) for s in instarts]))
 
 @curry
-def naryop_updater(prim, meta_static, meta_dyn, old_out, *operands, **params):
-  insizes = meta_static
+def naryop_updater(prim, meta_static, meta_dyn, old_out, *operands):
+  if meta_static is None:
+      return old_out
+  inshapes, params = meta_static
+  params = dict(params)
   outstart, instarts = meta_dyn
   operands = [lax.dynamic_slice(o, start, size)
-              for o, start, size in zip(operands, instarts, insizes)]
+              for o, start, size in zip(operands, instarts, inshapes)]
   return lax.dynamic_update_slice(
       old_out, prim.bind(*operands, **params), outstart)
 
@@ -108,7 +127,7 @@ naryops = [
 for op in naryops:
   dependency_rules[op] = naryop_dependency_rule(op)
   meta_argmakers[op] = naryop_meta_maker(op)
-  updaters[op] = naryop_updater(op)
+  updaters[op] = updater_wrapper(naryop_updater(op))
 
 @curry
 def reduce_dependency_rule(prim, outstart, outcount, operand, axes, **kwargs):
@@ -174,28 +193,75 @@ def concatenate_dependency_rule(outstart, outcount, *operands, dimension):
       incounts.append(None)
     position += shape[dim]
 
-  return inboxes, incounts, lambda *inslices: lax.concatenate(
-    [x for x in inslices if x is not None], dimension)
+  return inboxes, incounts
+
+def concatenate_meta_maker(outbox, *operands, dimension):
+  outstart, outshape = outbox
+  if outstart is None:
+    out_ndim = outshape
+    in_ndims = map(np.ndim, operands)
+    return None, (jnp.zeros(out_ndim, int),
+                  [jnp.zeros(d, int) for d in in_ndims])
+  out_ndim = len(outstart)
+  inboxes, _ = concatenate_dependency_rule(outstart, Ones(outshape), *operands,
+                                           dimension=dimension)
+  inboxes = [i or (jnp.zeros(out_ndim), None) for i in inboxes]
+  instarts, inshapes = unzip2(inboxes)
+  inshapes = [s and tuple(s) for s in inshapes]
+  return (dimension, tuple(inshapes)), (jnp.array(outstart, int),
+                                        [jnp.array(s, int) for s in instarts])
+
+@updater_wrapper
+def concatenate_updater(meta_static, meta_dyn, old_out, *operands):
+  if meta_static is None:
+    return old_out
+  dim, inshapes = meta_static
+  outstart, instarts = meta_dyn
+  inslices = [lax.dynamic_slice(o, start, shape) for o, start, shape in
+              zip(operands, instarts, inshapes) if shape is not None]
+  return lax.dynamic_update_slice(
+      old_out, lax.concatenate(inslices, dim), outstart)
 
 dependency_rules[lax.concatenate_p] = concatenate_dependency_rule
+meta_argmakers[lax.concatenate_p] = concatenate_meta_maker
+updaters[lax.concatenate_p] = concatenate_updater
 
 def slice_dependency_rule(
     outstart, outcount, operand, start_indices, limit_indices, strides):
   out_shape = np.asarray(outcount.shape)
   if strides is None:
     inbox = np.add(start_indices, outstart), out_shape
-    return [inbox], [np.ones(inbox[1], int)], lambda inslice: inslice
+    return [inbox], [np.ones(inbox[1], int)]
   else:
     strides = np.asarray(strides)
     inbox = (start_indices + outstart * strides, (out_shape - 1) * strides + 1)
     count = np.zeros(inbox[1], int)
     count_slice = tuple(slice(None, None, s) for s in strides)
     count[count_slice] = 1
-    return ([inbox], [count],
-            lambda inslice: lax.slice(inslice, np.zeros_like(strides),
-                                      inslice.shape, strides))
+    return [inbox], [count]
+
+def slice_meta_maker(outbox, operand, start_indices, limit_indices, strides):
+  outstart, outshape = outbox
+  if outstart is None:
+    return None, jnp.array([])
+  [(in_start, in_shape)], _ = slice_dependency_rule(
+      outstart, Ones(outshape), operand, start_indices, limit_indices, strides)
+  in_limit = tuple(np.add(in_start, in_shape))
+  in_start, outstart = tuple(in_start), tuple(outstart)
+  strides = strides if strides is None else tuple(strides)
+  return (in_start, in_limit, strides, outstart), jnp.array([])
+
+@updater_wrapper
+def slice_updater(meta_static, meta_dyn, old_out, operand):
+  if meta_static is None:
+    return old_out
+  in_start, in_limit, strides, out_start = meta_static
+  return lax.dynamic_update_slice(
+      old_out, lax.slice(operand, in_start, in_limit, strides), out_start)
 
 dependency_rules[lax.slice_p] = slice_dependency_rule
+meta_argmakers[lax.slice_p] = slice_meta_maker
+updaters[lax.slice_p] = slice_updater
 
 def transpose_dependency_rule(outstart, outcount, operand, permutation):
   inverse_perm = np.argsort(permutation)

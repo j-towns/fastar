@@ -3,8 +3,8 @@ from typing import Callable, List, Union
 import numpy as np
 import jax.core as jc
 from jax.core import Var
-from jax.util import safe_map, safe_zip
-from jax import lax, ShapeDtypeStruct, tree_multimap
+from jax.util import safe_map, safe_zip, unzip2
+from jax import lax, ShapeDtypeStruct, tree_multimap, tree_map
 import jax.numpy as jnp
 
 from fastar.box_util import (box_to_slice, slice_to_box, getbox, setbox,
@@ -41,7 +41,7 @@ def compute_child_counts(haxpr):
         start, Ones(shape), *map(_shape_dtype, eqn.invars), **eqn.params)
       for i, ibox, count in zip(eqn.invars, inboxes, counts):
         if type(i) is Var and i in child_counts:
-          addbox(child_counts[i], ibox, count)
+          addbox(child_counts[i], ibox, materialize(count))
           visit(i, ibox)
 
   for o in haxpr.outvars:
@@ -67,9 +67,10 @@ def toposort(haxpr):
             start, Ones(shape), *map(_shape_dtype, e.invars), **e.params)
         for i, ibox, count in zip(e.invars, inboxes, counts):
           if isinstance(i, Var) and i in child_counts and ibox is not None:
+            count = materialize(count)
             assert np.all(count > 0)
             to_iglobal_coords = lambda b: (np.add(ibox[0], b[0]), b[1])
-            addbox(child_counts[i], ibox, -materialize(count))
+            addbox(child_counts[i], ibox, -count)
             ilocal_child_counts = getbox(child_counts[i], ibox)
             if not i in childless_boxes:
               childless_boxes[i] = []
@@ -78,8 +79,8 @@ def toposort(haxpr):
                for b in static_box_finder((ilocal_child_counts == 0))])
       else:
         sorted_boxes[o].append(None)
-    l, = set(map(len, sorted_boxes.values()))  # Check all same length
-    sorted_boxes = {o: list(reversed(sorted_boxes[o])) for o in sorted_boxes}
+  l, = set(map(len, sorted_boxes.values()))  # Check all same length
+  sorted_boxes = {o: list(reversed(sorted_boxes[o])) for o in sorted_boxes}
   return sorted_boxes
 
 def sort_and_compress(haxpr):
@@ -89,13 +90,14 @@ def sort_and_compress(haxpr):
     o, = e.outvars
     meta_argmaker = meta_argmakers[e.primitive]
     static_args, dyn_args = unzip2([
-        meta_argmaker(obox, map(_shape_dtype, e.invars), **e.params)
+        meta_argmaker(obox or (None, o.aval.ndim),
+                      *map(_shape_dtype, e.invars), **e.params)
         for obox in sorted_boxes[o]])
     static_args_compressed = list(set(static_args))
     static_args_map = dict(
         (a, i) for i, a in enumerate(static_args_compressed))
-    static_args_idxs = np.array(static_args_map[a] for a in static_args)
-    dyn_args = tree_multimap(lambda *els: np.concatenate(els), *dyn_args)
+    static_args_idxs = jnp.array([static_args_map[a] for a in static_args])
+    dyn_args = tree_multimap(lambda *els: jnp.stack(els), *dyn_args)
     meta_args.append((static_args_compressed, static_args_idxs, dyn_args))
   return meta_args
 
@@ -145,7 +147,8 @@ def eval_haxpr(haxpr, consts):
       outval, = map(read, eqn.outvars)
       switch_kernels = map(updaters[eqn.primitive], static_args)
       new_outval = lax.switch(static_arg_idxs[i], switch_kernels,
-                              (dyn_args[i], invals, eqn.params))
+                              (tree_map(lambda x: x[i], dyn_args), outval,
+                               invals))
       overwrite(eqn.outvars[0], new_outval)
     return env
   num_iters = len(meta_args[0][1] if meta_args else 0)
