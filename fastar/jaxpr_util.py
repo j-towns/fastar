@@ -20,6 +20,7 @@ class DelayedArray:
   shape: Any
   dtype: Any
   parent: Any
+  idx: Any
 pytype_aval_mappings[DelayedArray] = lambda d: ShapedArray(d.shape, d.dtype)
 
 def abstractify(x):
@@ -29,28 +30,25 @@ def fastar_jaxpr(flat_thunk):
   jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(flat_thunk, [])
   return ClosedJaxpr(inline_calls(jaxpr), consts)
 
-def tie_the_knot(jaxpr, result):
-  assert tuple(jaxpr.out_avals) == (ShapedArray(result.shape_dtype.shape,
-                                                result.shape_dtype.dtype),)
-  j = jaxpr.jaxpr
-  result_var, = j.outvars
-  replace_vars = []
-  constvars = []
-  consts = []
-  for v, c in zip(j.constvars, jaxpr.consts):
+def tie_the_knot(closed_jaxpr, result):
+  jaxpr = closed_jaxpr.jaxpr
+  to_replace = {}
+  new_constvars = []
+  new_consts = []
+  for v, c in zip(jaxpr.constvars, closed_jaxpr.consts):
     if isinstance(c, DelayedArray):
       assert c.parent is result
-      replace_vars.append(v)
+      to_replace[v] = jaxpr.outvars[c.idx]
     else:
-      constvars.append(v)
-      consts.append(c)
-  replace_vars = set(replace_vars)
+      new_constvars.append(v)
+      new_consts.append(c)
   replace = lambda v: (
-      result_var if (isinstance(v, Var) and v in replace_vars) else v)
+      to_replace[v] if (isinstance(v, Var) and v in to_replace) else v)
   return ClosedJaxpr(
-      Jaxpr(constvars, [], j.outvars, [JaxprEqn(
-          *([replace(i) for i in e.invars],) + e[1:]) for e in j.eqns]),
-      consts)
+      Jaxpr(new_constvars, [], jaxpr.outvars,
+            [JaxprEqn(*([replace(i) for i in e.invars],) + e[1:])
+             for e in jaxpr.eqns]),
+      new_consts)
 
 def inline_calls(jaxpr):
   new_eqns = []

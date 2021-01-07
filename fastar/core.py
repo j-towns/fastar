@@ -107,6 +107,7 @@ def toposort(haxpr):
       else:
         e_sorted.append(None)
   assert len(set(map(len, sorted_updates))) == 1
+  assert all(np.all(v == 0) for v in child_counts.values())
   return [list(reversed(s)) for s in sorted_updates]
 
 def _any(els):

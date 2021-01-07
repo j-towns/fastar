@@ -15,35 +15,6 @@ def check_shape_and_dtype(expected, actual):
   assert expected.shape == actual.shape
   assert expected.dtype == actual.dtype
 
-def naive_fixed_point(fun, arg):
-  arg, arg_prev = fun(arg), arg
-  while not jnp.all(arg == arg_prev):
-    arg, arg_prev = fun(arg), arg
-  return arg
-
-def check_child_counts(arrs):
-  visited = set()
-  def _check_child_counts(arrs):
-    for arr in arrs:
-      if isinstance(arr, LazyArray) and arr not in visited:
-        assert type(arr.child_counts) is np.ndarray
-        assert arr.child_counts.dtype == np.int64
-        assert np.all(arr.child_counts == 0)
-        visited.add(arr)
-        _check_child_counts(arr.eqn.invars)
-  _check_child_counts(arrs)
-
-def check_state(arrs):
-  # Make sure none of the elements are in the temporary REQUESTED state
-  visited = set()
-  def _check_state(arrs):
-    for arr in arrs:
-      if isinstance(arr, LazyArray) and arr not in visited:
-        assert np.all((arr.state == 0) | (arr.state == 1))
-        visited.add(arr)
-        _check_state(arr.eqn.invars)
-  _check_state(arrs)
-
 def _identity(x):
   return x + np.zeros((), x.dtype)
 
