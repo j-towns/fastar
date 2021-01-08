@@ -99,11 +99,13 @@ def toposort(haxpr):
             to_iglobal_coords = lambda b: (np.add(ibox[0], b[0]), b[1])
             addbox(child_counts[i], ibox, -count)
             ilocal_child_counts = getbox(child_counts[i], ibox)
-            if not i in childless_boxes:
-              childless_boxes[i] = []
-            childless_boxes[i].extend(
-              [to_iglobal_coords(b)
-               for b in static_box_finder((ilocal_child_counts == 0))])
+            newly_childless = [
+                to_iglobal_coords(b)
+                for b in static_box_finder((ilocal_child_counts == 0))]
+            if newly_childless:
+              if not i in childless_boxes:
+                childless_boxes[i] = []
+              childless_boxes[i].extend(newly_childless)
       else:
         e_sorted.append(None)
   assert len(set(map(len, sorted_updates))) == 1

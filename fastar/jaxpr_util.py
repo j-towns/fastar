@@ -17,6 +17,7 @@ zip = safe_zip
 
 @dataclass
 class DelayedArray:
+  # TODO: fix infix operators (will need operator overloading here)
   shape: Any
   dtype: Any
   parent: Any
