@@ -212,7 +212,7 @@ def eval_haxpr(haxpr, consts):
 
 class Ones:
   def __init__(self, shape):
-    self.shape = shape
+    self.shape = tuple(shape)
 
   ndim = property(lambda self: len(self.shape))
   size = property(lambda self: np.prod(self.shape, dtype=int))

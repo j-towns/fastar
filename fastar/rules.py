@@ -74,9 +74,13 @@ naryops = [
     lax.asinh_p,
     lax.cosh_p,
     lax.sinh_p,
+    lax.asin_p,
+    lax.acos_p,
+    lax.atan_p,
     lax.atan2_p,
     lax.cos_p,
     lax.sin_p,
+    lax.tan_p,
     lax.tanh_p,
     lax.log1p_p,
     lax.expm1_p,
@@ -131,10 +135,14 @@ def squeeze_dependency_rule(outstart, outcount, operand, dimensions):
   for d in np.sort(dimensions):
     instart.insert(d, 0)
     inshape.insert(d, 1)
-  return ([(instart, inshape)], [Ones(inshape)],
-          lambda inslice: lax.squeeze(inslice, dimensions))
+  return [(instart, inshape)], [Ones(inshape)], (tuple(dimensions), None)
+
+def squeeze_kernel(meta_static, meta_dynamic, operand):
+  dimensions = meta_static
+  return lax.squeeze(operand, dimensions)
 
 dependency_rules[lax.squeeze_p] = squeeze_dependency_rule
+kernels[lax.squeeze_p] = squeeze_kernel
 
 def concatenate_dependency_rule(outstart, outcount, *operands, dimension):
   if not is_ones(outcount):
@@ -220,10 +228,15 @@ def broadcast_in_dim_dependency_rule(
   instart = np.where(is_broadcast, 0, np.take(outstart, broadcast_dimensions))
   inshape = np.where(is_broadcast, 1, np.take(outshape, broadcast_dimensions))
   incount = np.full(inshape, prod(shape) // prod(operand.shape))
-  return [(instart, inshape)], [incount], lambda inslice: lax.broadcast_in_dim(
-    inslice, outshape, broadcast_dimensions)
+  return ([(instart, inshape)], [incount],
+          ((outshape, tuple(broadcast_dimensions)), None))
+
+def broadcast_in_dim_kernel(meta_static, meta_dynamic, operand):
+  outshape, broadcast_dimensions = meta_static
+  return lax.broadcast_in_dim(operand, outshape, broadcast_dimensions)
 
 dependency_rules[lax.broadcast_in_dim_p] = broadcast_in_dim_dependency_rule
+kernels[lax.broadcast_in_dim_p] = broadcast_in_dim_kernel
 
 def dot_general_dependency_rule(
     outstart, outcount, lhs, rhs, dimension_numbers, precision):
