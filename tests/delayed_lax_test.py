@@ -148,3 +148,31 @@ def test_nary(op_name, rng_factory, shapes, dtype, tol):
   def thunk():
     return getattr(lax, op_name)(*args)
   tu.check_multibox(thunk, atol=tol, rtol=tol)
+
+ReduceOpRecord = collections.namedtuple(
+    "ReduceOpRecord", ["op", "init_val", "nargs", "dtypes", "rng_factory", "tol"])
+def reduce_op_record(op, init_val, nargs, dtypes, rng_factory, tol=None):
+  return ReduceOpRecord(op, init_val, nargs, dtypes, rng_factory, tol)
+
+LAX_REDUCE_OPS = [
+  reduce_op_record("add", 0,       1, number_dtypes, jtu.rand_default),
+  reduce_op_record("mul", 1,       1, number_dtypes, jtu.rand_small_positive),
+  reduce_op_record("max", -np.inf, 1, all_dtypes, jtu.rand_default),
+  reduce_op_record("min", np.inf,  1, all_dtypes, jtu.rand_default),
+  reduce_op_record("bitwise_or",  False,   1, bool_dtypes, jtu.rand_default),
+  reduce_op_record("bitwise_and", True,    1, bool_dtypes, jtu.rand_default),
+]
+
+@pytest.mark.parametrize(
+  'op_name,init_val,rng_factory,shape,axes,dtype,tol',
+  [(rec.op, rec.init_val, rec.rng_factory, shape, axes, dtype, rec.tol)
+   for rec in LAX_REDUCE_OPS
+   for (shape, axes) in [[(3, 4, 5), (0,)], [(3, 4, 5), (1, 2)],
+                         [(3, 4, 5), (0, 2)], [(3, 4, 5), (0, 1, 2)]]
+   for dtype in rec.dtypes])
+def test_reduce(op_name, init_val, rng_factory, shape, axes, dtype, tol):
+  rng = rng_factory(np.random)
+  args = [rng(shape, dtype)]
+  def thunk():
+    return lax.reduce(*args, init_val, getattr(lax, op_name), axes)
+  tu.check_multibox(thunk, atol=tol, rtol=tol)

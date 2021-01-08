@@ -111,7 +111,12 @@ def reduce_dependency_rule(prim, outstart, outcount, operand, axes, **kwargs):
     instart.insert(d, 0)
     inshape.insert(d, operand.shape[d])
   return ([(instart, inshape)], [Ones(inshape)],
-          lambda inslice: prim.bind(inslice, axes=axes, **kwargs))
+          ((axes, tuple(kwargs.items())), None))
+
+@curry
+def reduce_kernel(prim, meta_static, meta_dynamic, operand):
+  axes, kwargs = meta_static
+  return prim.bind(operand, axes=axes, **dict(kwargs))
 
 reduce_ops = [
   lax.reduce_sum_p,
@@ -126,6 +131,7 @@ reduce_ops = [
 
 for op in reduce_ops:
   dependency_rules[op] = reduce_dependency_rule(op)
+  kernels[op] = reduce_kernel(op)
 
 def squeeze_dependency_rule(outstart, outcount, operand, dimensions):
   if not is_ones(outcount):
