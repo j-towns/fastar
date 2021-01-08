@@ -176,3 +176,60 @@ def test_reduce(op_name, init_val, rng_factory, shape, axes, dtype, tol):
   def thunk():
     return lax.reduce(*args, init_val, getattr(lax, op_name), axes)
   tu.check_multibox(thunk, atol=tol, rtol=tol)
+
+JAX_ARGMINMAX_RECORDS = [
+  op_record("argmin", 1, default_dtypes, jtu.rand_some_equal),
+  op_record("argmax", 1, default_dtypes, jtu.rand_some_equal),
+]
+
+@pytest.mark.parametrize(
+  'op,rng_factory,shape,dtype,axis,index_dtype',
+  [(rec.op, rec.rng_factory, shape, dtype, axis, index_dtype)
+  for rec in JAX_ARGMINMAX_RECORDS
+  for shape in [(1,), (4,), (2, 3), (1, 2, 1)]
+  for dtype in rec.dtypes
+  for index_dtype in int_dtypes
+  for axis in range(len(shape))
+  if dtype not in (np.complex128, dtypes.bfloat16)])
+def test_argminmax(op, rng_factory, shape, dtype, axis, index_dtype):
+  rng = rng_factory(np.random)
+  args = [rng(shape, dtype)]
+  def thunk():
+    return getattr(lax, op)(*args, axis, index_dtype)
+  tu.check_multibox(thunk)
+
+@pytest.mark.parametrize(
+  'shape,dtype,dimensions,rng_factory',
+  [(shape, dtype, dimensions, rng_factory)
+   for dtype in default_dtypes
+   for (shape, dimensions) in [
+     [(1,), (0,)],
+     [(1,), (-1,)],
+     [(2, 1, 4), (1,)],
+     [(2, 1, 3, 1), (1,)],
+     [(2, 1, 3, 1), (1, 3)],
+     [(2, 1, 3, 1), (3,)]]
+   for rng_factory in [jtu.rand_default]])
+def test_squeeze(shape, dtype, dimensions, rng_factory):
+  rng = rng_factory(np.random)
+  args = [rng(shape, dtype)]
+  def thunk():
+    return lax.squeeze(*args, dimensions)
+  tu.check_multibox(thunk)
+
+@pytest.mark.parametrize(
+    'dim,base_shape,dtype,num_arrs,rng_factory',
+    [(dim, base_shape, dtype, num_arrs, rng_factory)
+     for num_arrs in [3]
+     for dtype in default_dtypes
+     for base_shape in [(4,), (3, 4), (2, 3, 4)]
+     for dim in range(len(base_shape))
+     for rng_factory in [jtu.rand_default]])
+def test_concatenate(dim, base_shape, dtype, num_arrs, rng_factory):
+  rng = rng_factory(np.random)
+  shapes = [base_shape[:dim] + (size,) + base_shape[dim+1:]
+            for size, _ in zip(itertools.cycle([3, 1, 4]), range(num_arrs))]
+  args = [rng(shape, dtype) for shape in shapes]
+  def thunk():
+    return lax.concatenate(args, dim)
+  tu.check_multibox(thunk)
