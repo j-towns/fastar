@@ -1,16 +1,12 @@
-from itertools import chain
-from random import shuffle
 import numpy as np
 
 import jax.test_util as jtu
 from jax import lax
 from jax.util import safe_map, safe_zip
-from jax.tree_util import tree_multimap, tree_flatten, tree_map
-from jax import random, ShapeDtypeStruct
-import jax.numpy as jnp
+from jax.tree_util import tree_flatten, tree_map
+from jax import ShapeDtypeStruct
 
 from fastar import delay, force
-from fastar.box_util import getbox
 
 map = safe_map
 zip = safe_zip
@@ -27,8 +23,10 @@ def check(thunk, atol=None, rtol=None):
   jtu.check_close(result, expected, atol, rtol)
 
 def random_box(rng, shape):
-  box_start = rng.randint(shape)
-  box_shape = rng.randint(1, np.subtract(shape, box_start - 1))
+  if np.any(np.less(shape, 0)):
+    raise ValueError
+  box_start = rng.randint(np.maximum(shape, 1))
+  box_shape = rng.randint(np.maximum(shape - (box_start - 1), 1))
   return box_start, box_shape
 
 def random_box_thunk(rng, thunk):
