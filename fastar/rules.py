@@ -209,9 +209,14 @@ def transpose_dependency_rule(outstart, outcount, operand, permutation):
   return ([(np.take(outstart, inverse_perm), inshape)],
           [Ones(inshape) if is_ones(outcount)
            else np.transpose(outcount, inverse_perm)],
-          lambda inslice: lax.transpose(inslice, permutation))
+          (tuple(permutation), None))
+
+def transpose_kernel(static_meta, dynamic_meta, operand):
+  permutation = static_meta
+  return lax.transpose(operand, permutation)
 
 dependency_rules[lax.transpose_p] = transpose_dependency_rule
+kernels[lax.transpose_p] = transpose_kernel
 
 def rev_dependency_rule(outstart, outcount, operand, dimensions):
   instart = [size - (start + outsize) if d in dimensions else start

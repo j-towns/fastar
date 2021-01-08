@@ -233,3 +233,16 @@ def test_concatenate(dim, base_shape, dtype, num_arrs, rng_factory):
   def thunk():
     return lax.concatenate(args, dim)
   tu.check_multibox(thunk)
+
+@pytest.mark.parametrize(
+  'shape,dtype,permutation,rng_factory',
+  [(shape, dtype, permutation, rng_factory)
+   for dtype in default_dtypes
+   for shape, permutation in [((3, 4), (1, 0)),
+                              ((3, 4, 5), (2, 1, 0)),
+                              ((3, 4, 5), (1, 0, 2))]
+   for rng_factory in [jtu.rand_default]])
+def test_transpose(shape, dtype, permutation, rng_factory):
+  rng = rng_factory(np.random)
+  arg = rng(shape, dtype)
+  tu.check_multibox(lambda: lax.transpose(arg, permutation=permutation))
