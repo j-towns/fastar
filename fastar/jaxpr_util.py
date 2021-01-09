@@ -23,6 +23,7 @@ class DelayedArray:
   parent: Any
   idx: Any
 pytype_aval_mappings[DelayedArray] = lambda d: ShapedArray(d.shape, d.dtype)
+xla.pytype_aval_mappings[DelayedArray] = lambda d: ShapedArray(d.shape, d.dtype)
 
 def abstractify(x):
   return ShapedArray(np.shape(x), dtypes.result_type(x))
