@@ -9,7 +9,7 @@ from jax import dtypes, jit, custom_jvp, lax, test_util as jtu
 
 from fastar import test_util as tu
 from fastar.core import Ones
-from fastar.rules import conv_incounts, pad_dependency_rule
+from fastar.rules import conv_incounts, pad_dependency_rule, pad_kernel
 
 
 # This is borrowed from lax_tests.py in the JAX tests directory.
@@ -146,29 +146,34 @@ LAX_OPS = [
 def test_nary(op_name, rng_factory, shapes, dtype, tol):
   rng = rng_factory(np.random)
   args = [rng(shape, dtype) for shape in shapes]
-  tu.check_lazy_fun(getattr(lax, op_name), *args, atol=tol, rtol=tol)
+  tu.check_multibox(lambda: getattr(lax, op_name)(*args), atol=tol, rtol=tol)
+
+ReduceOpRecord = collections.namedtuple(
+  "ReduceOpRecord", ["op", "init_val", "nargs", "dtypes", "rng_factory", "tol"])
+def reduce_op_record(op, init_val, nargs, dtypes, rng_factory, tol=None):
+  return ReduceOpRecord(op, init_val, nargs, dtypes, rng_factory, tol)
 
 LAX_REDUCE_OPS = [
-  op_record("_reduce_sum", 1, number_dtypes, jtu.rand_default),
-  op_record("_reduce_prod", 1, number_dtypes, jtu.rand_small_positive),
-  op_record("_reduce_max", 1, all_dtypes, jtu.rand_default),
-  op_record("_reduce_min", 1, all_dtypes, jtu.rand_default),
-  op_record("_reduce_or", 1, bool_dtypes, jtu.rand_default),
-  op_record("_reduce_and", 1, bool_dtypes, jtu.rand_default),
+  reduce_op_record("add", 0,       1, number_dtypes, jtu.rand_default),
+  reduce_op_record("mul", 1,       1, number_dtypes, jtu.rand_small_positive),
+  reduce_op_record("max", -np.inf, 1, all_dtypes, jtu.rand_default),
+  reduce_op_record("min", np.inf,  1, all_dtypes, jtu.rand_default),
+  reduce_op_record("bitwise_or",  False,   1, bool_dtypes, jtu.rand_default),
+  reduce_op_record("bitwise_and", True,    1, bool_dtypes, jtu.rand_default),
 ]
 
 @pytest.mark.parametrize(
-  'op_name,rng_factory,shape,axes,dtype,tol',
-  [(rec.op, rec.rng_factory, shape, axes, dtype, rec.tol)
+  'op_name,init_val,rng_factory,shape,axes,dtype,tol',
+  [(rec.op, rec.init_val, rec.rng_factory, shape, axes, dtype, rec.tol)
    for rec in LAX_REDUCE_OPS
    for (shape, axes) in [[(3, 4, 5), (0,)], [(3, 4, 5), (1, 2)],
                          [(3, 4, 5), (0, 2)], [(3, 4, 5), (0, 1, 2)]]
    for dtype in rec.dtypes])
-def test_reduce(op_name, rng_factory, shape, axes, dtype, tol):
+def test_reduce(op_name, init_val, rng_factory, shape, axes, dtype, tol):
   rng = rng_factory(np.random)
   args = [rng(shape, dtype)]
-  fun = partial(getattr(lax.lax, op_name), axes=axes)
-  tu.check_lazy_fun(fun, *args, atol=tol, rtol=tol)
+  thunk = lambda: lax.reduce(*args, init_val, getattr(lax, op_name), axes)
+  tu.check_multibox(thunk, atol=tol, rtol=tol)
 
 JAX_ARGMINMAX_RECORDS = [
   op_record("argmin", 1, default_dtypes, jtu.rand_some_equal),
@@ -188,7 +193,7 @@ def test_argminmax(op, rng_factory, shape, dtype, axis, index_dtype):
   rng = rng_factory(np.random)
   def fun(x): return getattr(lax, op)(x, axis, index_dtype)
   args = [rng(shape, dtype)]
-  tu.check_lazy_fun(fun, *args)
+  tu.check_multibox(lambda: fun(*args))
 
 @pytest.mark.parametrize(
   'shape,dtype,dimensions,rng_factory',
@@ -205,7 +210,7 @@ def test_argminmax(op, rng_factory, shape, dtype, axis, index_dtype):
 def test_squeeze(shape, dtype, dimensions, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(shape, dtype)]
-  tu.check_lazy_fun(lambda x: lax.squeeze(x, dimensions), *args)
+  tu.check_multibox(lambda: lax.squeeze(*args, dimensions))
 
 @pytest.mark.parametrize(
     'dim,base_shape,dtype,num_arrs,rng_factory',
@@ -221,7 +226,7 @@ def test_concatenate(dim, base_shape, dtype, num_arrs, rng_factory):
             for size, _ in zip(itertools.cycle([3, 1, 4]), range(num_arrs))]
   args = [rng(shape, dtype) for shape in shapes]
   op = lambda *args: lax.concatenate(args, dim)
-  tu.check_lazy_fun(op, *args)
+  tu.check_multibox(lambda: op(*args))
 
 @pytest.mark.parametrize(
   'shape,dtype,permutation,rng_factory',
@@ -234,7 +239,7 @@ def test_concatenate(dim, base_shape, dtype, num_arrs, rng_factory):
 def test_transpose(shape, dtype, permutation, rng_factory):
   rng = rng_factory(np.random)
   arg = rng(shape, dtype)
-  tu.check_lazy_fun(lambda x: lax.transpose(x, permutation=permutation), arg)
+  tu.check_multibox(lambda: lax.transpose(arg, permutation=permutation))
 
 @pytest.mark.parametrize(
     'shape,dtype,dimensions,rng_factory',
@@ -245,7 +250,7 @@ def test_transpose(shape, dtype, permutation, rng_factory):
 def test_rev(shape, dtype, dimensions, rng_factory):
   rng = rng_factory(np.random)
   arg = rng(shape, dtype)
-  tu.check_lazy_fun(lambda x: lax.rev(x, dimensions=dimensions), arg)
+  tu.check_multibox(lambda: lax.rev(arg, dimensions=dimensions))
 
 @pytest.mark.parametrize(
   'lhs_shape,rhs_shape,dtype,rng_factory',
@@ -257,7 +262,7 @@ def test_rev(shape, dtype, dimensions, rng_factory):
 def test_dot(lhs_shape, rhs_shape, dtype, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
-  tu.check_lazy_fun(lax.dot, *args)
+  tu.check_multibox(lambda: lax.dot(*args))
 
 @pytest.mark.parametrize(
   'lhs_shape,rhs_shape,dimension_numbers,dtype,rng_factory',
@@ -270,7 +275,7 @@ def test_dot(lhs_shape, rhs_shape, dtype, rng_factory):
 def test_dot_general_contract_and_batch(lhs_shape, rhs_shape, dimension_numbers, dtype, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
-  tu.check_lazy_fun(partial(lax.dot_general, dimension_numbers=dimension_numbers), *args, atol=1e-5)
+  tu.check_multibox(lambda: lax.dot_general(*args, dimension_numbers=dimension_numbers), atol=1e-5)
 
 @pytest.mark.parametrize(
   'lhs_shape,rhs_shape,dtype,lhs_contracting,rhs_contracting,rng_factory',
@@ -290,7 +295,7 @@ def test_dot_general_contract_only(
   rng = rng_factory(np.random)
   args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
   dimension_numbers = ((lhs_contracting, rhs_contracting), ((), ()))
-  tu.check_lazy_fun(partial(lax.dot_general, dimension_numbers=dimension_numbers), *args, atol=1e-5)
+  tu.check_multibox(lambda: lax.dot_general(*args, dimension_numbers=dimension_numbers), atol=1e-5)
 
 @pytest.mark.parametrize(
   'shape,dtype,starts,limits,strides,rng_factory',
@@ -311,8 +316,7 @@ def test_dot_general_contract_only(
 def test_slice(shape, dtype, starts, limits, strides, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(shape, dtype)]
-  op = lambda x: lax.slice(x, starts, limits, strides)
-  tu.check_lazy_fun(op, *args)
+  tu.check_multibox(lambda: lax.slice(*args, starts, limits, strides))
 
 @pytest.mark.parametrize(
   "inshape,dtype,outshape,dimensions,rng_factory",
@@ -328,8 +332,7 @@ def test_slice(shape, dtype, starts, limits, strides, rng_factory):
 def test_broadcast_in_dim(inshape, dtype, outshape, dimensions, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(inshape, dtype)]
-  op = lambda x: lax.broadcast_in_dim(x, outshape, dimensions)
-  tu.check_lazy_fun(op, *args)
+  tu.check_multibox(lambda: lax.broadcast_in_dim(*args, outshape, dimensions))
 
 @pytest.mark.parametrize(
   'shape,dtype,padding_config,rng_factory',
@@ -348,8 +351,7 @@ def test_broadcast_in_dim(inshape, dtype, outshape, dimensions, rng_factory):
 def test_pad(shape, dtype, padding_config, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(shape, dtype), rng((), dtype)]
-  op = lambda *args: lax.pad(*args, padding_config)
-  tu.check_lazy_fun(op, *args)
+  tu.check_multibox(lambda: lax.pad(*args, padding_config))
 
 @pytest.mark.parametrize(
   'lhs_shape,rhs_shape,dtype,strides,padding,rng_factory',
@@ -364,8 +366,7 @@ def test_pad(shape, dtype, padding_config, rng_factory):
 def test_conv(lhs_shape, rhs_shape, dtype, strides, padding, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
-  fun = lambda lhs, rhs: lax.conv(lhs, rhs, strides, padding)
-  tu.check_lazy_fun(fun, *args)
+  tu.check_multibox(lambda: lax.conv(*args, strides, padding))
 
 @pytest.mark.parametrize(
   'lhs_shape,rhs_shape,dtype,strides,padding,lhs_dilation,rhs_dilation,'
@@ -397,12 +398,12 @@ def test_conv_general_dilated(lhs_shape, rhs_shape, dtype, strides,
   lhs_perm, rhs_perm = perms  # permute to compatible shapes
   args = [lax.transpose(rng(lhs_shape, dtype), lhs_perm),
           lax.transpose(rng(rhs_shape, dtype), rhs_perm)]
-  def fun(lhs, rhs):
+  def thunk():
     return lax.conv_general_dilated(
-      lhs, rhs, strides, padding, lhs_dilation, rhs_dilation,
+      *args, strides, padding, lhs_dilation, rhs_dilation,
       dimension_numbers, feature_group_count=feature_group_count,
       batch_group_count=batch_group_count)
-  tu.check_lazy_fun(fun, *args, rtol=.005, atol=.2)
+  tu.check_multibox(thunk, rtol=.005, atol=.2)
 
 def test_conv_incounts():
   rhs_shape = (4, 1, 2, 3)
@@ -433,11 +434,11 @@ def test_conv_incounts_strided():
    ((15,), np.arange(1), None), # outstart in hi
   ])
 def test_pad_dependency_rule(outstart, outcount, expected_incount):
-  (instart, _), (incount, _), outslice = pad_dependency_rule(
+  (instart, _), (incount, _), (kernel_kwargs, _) = pad_dependency_rule(
     outstart, outcount, np.arange(3), 0, ((4, 4, 2),))
   np.testing.assert_array_equal(expected_incount, incount)
   inslice = None if incount is None else np.ones(incount.shape, int)
-  assert outslice(inslice, 0).shape == outcount.shape
+  assert pad_kernel(inslice, 0, **kernel_kwargs).shape == outcount.shape
 
 @pytest.mark.parametrize(
     'pred_shape,arg_shape,arg_dtype,rng_factory',
@@ -450,21 +451,22 @@ def test_select(pred_shape, arg_shape, arg_dtype, rng_factory):
   rng = rng_factory(np.random)
   args = [rng(pred_shape, np.bool_), rng(arg_shape, arg_dtype),
           rng(arg_shape, arg_dtype)]
-  return tu.check_lazy_fun(lax.select, *args)
+  return tu.check_multibox(lambda: lax.select(*args))
 
-def test_custom_jvp():
+def TODO_test_custom_jvp():
   @custom_jvp
   def f(x):
     return x ** 2
 
   f.defjvp(lambda x: 2 * x)
   rng = jtu.rand_small(np.random)
-  tu.check_lazy_fun(f, rng((1,), 'float32'))
+  tu.check_multibox(lambda: f(rng((1,), 'float32')))
 
 def test_jit():
   rng = jtu.rand_small(np.random)
-  tu.check_lazy_fun(jit(lambda x: x * 2), rng((1,), int))
+  tu.check_multibox(lambda: jit(lambda x: x * 2)(rng((1,), int)))
 
 def test_jit_freevar():
   rng = jtu.rand_small(np.random)
-  tu.check_lazy_fun(lambda x, y: jit(lambda x: x * y)(x), rng((1,), int), rng((1,), int))
+  x, y = rng((1,), int), rng((1,), int)
+  tu.check_multibox(lambda: jit(lambda x: x * y)(x))

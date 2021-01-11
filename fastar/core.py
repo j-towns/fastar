@@ -80,7 +80,9 @@ def toposort(haxpr):
   sorted_updates = [[] for _ in haxpr.eqns]
   childless_boxes = {}
   for o in haxpr.outvars:
-    childless_boxes[o] = static_box_finder(child_counts[o], 0)
+    childless = static_box_finder(child_counts[o], 0)
+    if childless:
+      childless_boxes[o] = childless
   while childless_boxes:
     for e_sorted, e in reversed(zip(sorted_updates, haxpr.eqns)):
       o, = e.outvars
@@ -115,7 +117,7 @@ def toposort(haxpr):
 def _any(els):
   for el in els:
     if el: return el
-  return el
+  return None
 
 # We use this because None is treated as a pytree node and we need a leaf
 class NullType: pass
@@ -130,7 +132,10 @@ def _stack(*args):
           else jnp.stack([sup if a is null else a for a in args]))
 
 def compress(updates):
-  static = [u and (u.meta_static, u.inshapes) for u in updates]
+  static = [u and
+            (None if u.meta_static is None
+             else tuple(sorted(u.meta_static.items())), u.inshapes)
+            for u in updates]
   static_compressed = list(set(static))
   static_mapping = dict((a, i) for i, a in enumerate(static_compressed))
   static_idxs = jnp.array([static_mapping[a] for a in static])
@@ -149,13 +154,15 @@ def _identity_update(switch_operand):
 def make_updater(kernel, static):
   if static is None: return _identity_update
   meta_static, inshapes = static
+  meta_static = dict(meta_static) if meta_static else dict()
   def update(switch_operand):
     dynamic, old_outval, *invals = switch_operand
     meta_dynamic, instarts, outstart = dynamic
+    meta_dynamic = meta_dynamic or dict()
     invals = [None if shape is None else lax.dynamic_slice(i, start, shape)
               for i, start, shape in zip(invals, instarts, inshapes)]
     return lax.dynamic_update_slice(
-         old_outval, kernel(meta_static, meta_dynamic, *invals), outstart)
+         old_outval, kernel(*invals, **meta_static, **meta_dynamic), outstart)
   return update
 
 def eval_haxpr(haxpr, consts):
@@ -209,7 +216,7 @@ def eval_haxpr(haxpr, consts):
       overwrite(eqn.outvars[0], new_outval)
     return env
   num_iters = len(meta_args[0][1] if meta_args else 0)
-  final_env = lax.fori_loop(0, num_iters, body_fun, env)
+  final_env = lax.fori_loop(0, num_iters, body_fun, env) if num_iters else env
   return map(read_final, haxpr.outvars)
 
 class Ones:
