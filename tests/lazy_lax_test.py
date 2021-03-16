@@ -453,7 +453,7 @@ def test_select(pred_shape, arg_shape, arg_dtype, rng_factory):
           rng(arg_shape, arg_dtype)]
   return tu.check_multibox(lambda: lax.select(*args))
 
-def TODO_test_custom_jvp():
+def test_custom_jvp():
   @custom_jvp
   def f(x):
     return x ** 2

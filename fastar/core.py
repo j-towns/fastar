@@ -67,7 +67,7 @@ def compute_child_counts(haxpr):
       inboxes, counts, _ = dependency_rules[eqn.primitive](
         start, Ones(shape), *map(_shape_dtype, eqn.invars), **eqn.params)
       for i, ibox, count in zip(eqn.invars, inboxes, counts):
-        if type(i) is Var and i in child_counts:
+        if type(i) is Var and i in child_counts and ibox is not None:
           addbox(child_counts[i], ibox, materialize(count))
           visit(i, ibox)
 

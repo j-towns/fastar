@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
 import numpy as np
@@ -10,6 +11,7 @@ from jax.core import (Literal, Jaxpr, JaxprEqn, Var, ClosedJaxpr,
                       pytype_aval_mappings)
 from jax.interpreters import xla, partial_eval as pe
 from jax.abstract_arrays import ShapedArray
+import jax._src.numpy.lax_numpy as lnp
 from functools import partial
 
 map = safe_map
@@ -22,8 +24,13 @@ class DelayedArray:
   dtype: Any
   parent: Any
   idx: Any
+
+  @cached_property
+  def ndim(self):
+    return len(self.shape)
 pytype_aval_mappings[DelayedArray] = lambda d: ShapedArray(d.shape, d.dtype)
 xla.pytype_aval_mappings[DelayedArray] = lambda d: ShapedArray(d.shape, d.dtype)
+lnp._arraylike_types = lnp._arraylike_types + (DelayedArray,)
 
 def abstractify(x):
   return ShapedArray(np.shape(x), dtypes.result_type(x))

@@ -36,8 +36,8 @@ def test_fixedpoint_2d():
 def test_fixedpoint_vmap():
   def elem(y):
     def fixed_point(x):
-      return jnp.concatenate([jnp.array([1.]), 2 * lax.slice(lax.add(x, 2 * y), 
-                                                             [0], [3])])
+      return jnp.concatenate([jnp.array([1.]),
+                              2 * lax.slice(lax.add(x, 2 * y), [0], [3])])
     def thunk():
       return fixed_point(force(x))
     x = delay(thunk, ShapeDtypeStruct((4,), jnp.float32))
