@@ -179,24 +179,24 @@ def scan_scanify_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
     return carry, body_fun, out_scanvars, out_to_delete
 register_scanify_rule(lax.scan_p, scan_scanify_rule)
 
-#def broadcast_in_dim_scanify_rule(inscanvars, operand, shape,
-#                                  broadcast_dimensions, sharding):
-#    _, [inscan_axis] = unzip2(inscanvars)
-#    if sharding is not None:
-#        raise ScanConversionError(
-#            "Sharding in broadcast_in_dim not yet supported."
-#        )
-#    if (operand.shape[inscan_axis] == 1
-#        and shape[broadcast_dimensions[inscan_axis]] > 1):
-#        raise ScanConversionError(
-#            "Global scan along broadcasting axis is not supported."
-#        )
-#    return lax.broadcast_in_dim_p.bind(
-#        operand, shape=shape, broadcast_dimensions=broadcast_dimensions,
-#        sharding=sharding
-#    ), [(0, broadcast_dimensions[inscan_axis])]
-#register_scanify_rule(lax.broadcast_in_dim_p, broadcast_in_dim_scanify_rule)
-#
+def broadcast_in_dim_scanify_rule(inscanvars, operand, shape,
+                                  broadcast_dimensions, sharding):
+    _, [inscan_axis] = unzip2(inscanvars)
+    if sharding is not None:
+        raise ScanConversionError(
+            "Sharding in broadcast_in_dim not yet supported."
+        )
+    if (operand.shape[inscan_axis] == 1
+        and shape[broadcast_dimensions[inscan_axis]] > 1):
+        raise ScanConversionError(
+            "Global scan along broadcasting axis is not supported."
+        )
+    return batch_scanify_rule(
+        lax.broadcast_in_dim_p, inscanvars, operand, shape=shape,
+        broadcast_dimensions=broadcast_dimensions, sharding=sharding
+    )
+register_scanify_rule(lax.broadcast_in_dim_p, broadcast_in_dim_scanify_rule)
+
 #def conv_general_dilated_scanify_rule(
 #    inscanvars, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
 #    dimension_numbers, feature_group_count, batch_group_count, precision,
