@@ -1,179 +1,223 @@
-from typing import Callable, List, Union
-import numpy as np
-import jax.core as jc
-from jax.lax.lax import Array
-from jax.util import safe_map, safe_zip
-from jax import lax, numpy as jnp
+from typing import Any
 
-from fastar.box_util import (box_to_slice, slice_to_box, getbox, setbox,
-                             addbox)
-from fastar.box_finder import box_finder, static_box_finder
-from fastar.jaxpr_util import Literal_
-from fastar.numpy_eval_util import inplace_dynamic_update_slice
+from jax.extend.core import (
+    ClosedJaxpr, Jaxpr, Primitive, Var, Literal, JaxprEqn
+)
+from jax.core import Atom
+from jax import make_jaxpr, ShapeDtypeStruct
+from jax.lax import scan_p
+
+from fastar.util import safe_map
+
 
 map = safe_map
-zip = safe_zip
 
-UNKNOWN = 0
-REQUESTED = -1
-KNOWN = 1
+scanify_rules = {}
 
-dependency_rules = {}
+def register_scanify_rule(p: Primitive, rule):
+    scanify_rules[p] = rule
 
-class LazyArray(object):
-  __slots__ = ['cache', 'state', 'eqn', 'var_idx', 'child_counts', '_aval',
-               'todo']
+###############################################################################
+# This section is copied from jax._src.core
 
-  def __init__(self, var):
-    self._aval = var.aval
-    self.cache = jnp.zeros(var.aval.shape, var.aval.dtype)
-    self.state = np.zeros(var.aval.shape, int)
-    self.child_counts = np.zeros(var.aval.shape, int)
-    self.eqn = None
-    self.var_idx = None
+# Copyright 2018 The JAX Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-  def set_eqn(self, eqn):
-    assert self.eqn is None and self.var_idx is None
-    self.eqn = eqn
-    self.var_idx = eqn.outvars.index(self)
+def last_used(jaxpr: Jaxpr) -> dict[Var, JaxprEqn | None]:
+    """Returns a mapping from every var in jaxpr to what equation uses it
+    last."""
+    last_used: dict[Var, JaxprEqn | None] = {
+        v: None for v in jaxpr.outvars if not isinstance(v, Literal)}
+    for eqn in reversed(jaxpr.eqns):
+        for v in eqn.invars:
+            if not isinstance(v, Literal) and v not in last_used:
+                last_used[v] = eqn
+    return last_used
 
-  @property
-  def shape(self):
-    return self._aval.shape
+def clean_up_dead_vars(eqn: JaxprEqn, env: dict[Var, Any],
+                       last_used: dict[Var, JaxprEqn | None]):
+    """Remove all eqn.invars from env if eqn is the last time they were
+    used."""
+    for v in {v for v in eqn.invars if not isinstance(v, Literal)}:
+        if last_used[v] is eqn:
+            # Delete ref to variable when it is no longer needed by next
+            # equations.
+            del env[v]
+###############################################################################
 
-  @property
-  def size(self):
-    return self._aval.size
+def make_body(j: ClosedJaxpr):
+    jaxpr = j.jaxpr
+    assert jaxpr.invars
+    axis_len = j.in_avals[0].shape[0]
+    assert all(a.shape[0] == axis_len for a in j.in_avals)
 
-  @property
-  def dtype(self):
-    return self._aval.dtype
+    carry_init: dict[Var, Any] = {}
 
-  @property
-  def ndim(self):
-    return self._aval.ndim
+    scanvars = dict(zip(jaxpr.invars, len(jaxpr.invars) * [0]))
 
-  def _compute_ancestral_child_counts(self, box):
-    start, shape = box
-    invals, _, primitive, params, _ = self.eqn
-    local_state = getbox(self.state, box)
-    uboxes = box_finder(local_state, UNKNOWN, REQUESTED)
-    for ubox in uboxes:
-      if primitive.multiple_results:
-        # TODO: pass var_idx to the dependency rule
-        raise NotImplementedError
-      ustart, ushape = ubox
-      ustart = np.add(start, ustart)
-      inboxes, counts, _ = dependency_rules[primitive](
-        ustart, Ones(ushape), *invals, **params)
-      for ival, ibox, count in zip(invals, inboxes, counts):
-        if isinstance(ival, LazyArray) and ibox is not None:
-          addbox(ival.child_counts,
-            ibox, materialize(count) * (getbox(ival.state, ibox) != KNOWN))
-          ival._compute_ancestral_child_counts(ibox)
+    def body_fn(carry, xs):
+        env: dict[Var, Any] = {}
+        def read(v: Atom) -> Any:
+            return v.val if isinstance(v, Literal) else env[v]
 
-  def _toposorted_updates(self, box) -> List[Callable[[], None]]:
-    self._compute_ancestral_child_counts(box)
-    to_global_coords = lambda b: (np.add(box[0], b[0]), b[1])
-    local_child_counts = getbox(self.child_counts, box)
-    childless_boxes = [
-        (self, to_global_coords(b)) for b in static_box_finder(
-            (local_child_counts == 0) & (getbox(self.state, box) != KNOWN))]
-    sorted_updates = []
-    while childless_boxes:
-      arr, box = childless_boxes.pop()
-      update, inboxes, counts = make_update_thunk(arr, box)
-      sorted_updates.append(update)
-      for ival, ibox, count in zip(arr.eqn.invars, inboxes, counts):
-        if isinstance(ival, LazyArray) and ibox is not None:
-          to_iglobal_coords = lambda b: (np.add(ibox[0], b[0]), b[1])
-          addbox(ival.child_counts,
-            ibox, -materialize(count) * (getbox(ival.state, ibox) != KNOWN))
-          ilocal_child_counts = getbox(ival.child_counts, ibox)
-          childless_boxes.extend(
-            [(ival, to_iglobal_coords(b))
-             for b in static_box_finder((ilocal_child_counts == 0) &
-                                        (getbox(ival.state, ibox) != KNOWN))])
-    return sorted_updates[::-1]
+        def write(v: Var, val: Any) -> None:
+            env[v] = val
 
-  def _getbox(self, box):
-    assert np.shape(box) == (2, self.ndim)
-    for update in self._toposorted_updates(box):
-      update()
-    return self.cache[box_to_slice(box)]
+        carry_old = list(reversed(carry))
+        carry_new = []
 
-  def __getitem__(self, idx):
-    if self.size:
-      box, int_dims = slice_to_box(self.shape, idx)
-      return self._getbox(box)[
-          tuple(0 if i in int_dims else slice(None) for i in range(self.ndim))]
-    else:
-      return jnp.zeros(self.shape, self.dtype)
+        map(write, jaxpr.constvars, j.consts)
+        map(write, jaxpr.invars, xs)
+        lu = last_used(jaxpr)
 
-def make_update_thunk(arr, box):
-  start, shape = box
-  invals, _, primitive, params, _ = arr.eqn
-  inboxes, counts, outslice_from_inslices = dependency_rules[primitive](
-    start, Ones(shape), *invals, **params)
-  def thunk():
-    if primitive.multiple_results:
-      raise NotImplementedError
-    # TODO (j-towns): add option to disable this assert statement
-    assert np.all(getbox(arr.state, box) == REQUESTED), \
-      'Repeated computation detected'
-    invals_ = [val.cache if isinstance(val, LazyArray) else jnp.asarray(val)
-               for val in invals]
-    inslices = [None if ibox is None else
-                lax.slice(inval, ibox[0], np.add(ibox[0], ibox[1]))
-                for inval, ibox, count in zip(invals_, inboxes, counts)]
-    outslice = outslice_from_inslices(*inslices)
-    outstart, _ = box
-    arr.cache = inplace_dynamic_update_slice(arr.cache, outslice, outstart)
-    setbox(arr.state, box, KNOWN)
-  return thunk, inboxes, counts
+        for e in jaxpr.eqns:
+            subfuns, bind_params = e.primitive.get_bind_params(e.params)
 
-def lazy_eval_jaxpr(jaxpr, consts, *args):
-  def read(v):
-    if type(v) in {jc.Literal, Literal_}:
-      return v.val
-    else:
-      return env[v]
+            inscanvars = [
+                (i, scanvars[v]) for (i, v) in enumerate(e.invars) if type(v)
+                is Var and v in scanvars
+            ]
+            if inscanvars:
+                carry_in = carry_old.pop()
+                in_vals = map(read, e.invars)
+                # TODO: Raise NotImplementedError if rule isn't defined
+                _, body_fun, outscanvars, _ = (
+                    scanify_rules[e.primitive](
+                        inscanvars, *subfuns, *in_vals, **bind_params
+                    ))
+                carry_out, ans = body_fun(carry_in, *in_vals)
+                outscanvars = [(e.outvars[i], l) for i, l in outscanvars]
+                carry_new.append(carry_out)
+            else:
+                ans = e.primitive.bind(
+                    *subfuns, *map(read, e.invars), **bind_params
+                )
+                outscanvars = []
 
-  def write(v, val):
-    env[v] = val
+            if e.primitive.multiple_results:
+                map(write, e.outvars, ans)
+            else:
+                write(e.outvars[0], ans)
+            scanvars.update(outscanvars)
+            clean_up_dead_vars(e, env, lu)
+        if any(o not in scanvars for o in jaxpr.outvars):
+            # TODO: More detail here...
+            raise ScanConversionError(
+                "All of the outputs of the transformed function must be "
+                "scanned over."
+            )
+        if any(scanvars[o] != 0 for o in jaxpr.outvars):
+            # TODO: ...and here.
+            raise ScanConversionError(
+                "All outputs of the transformed function must be scanned over "
+                "axis 0."
+            )
+        return carry_new, map(read, jaxpr.outvars)
 
-  env = {}
-  write(jc.unitvar, jc.unit)
-  map(write, jaxpr.constvars, consts)
-  map(write, jaxpr.invars, args)
-  for eqn in jaxpr.eqns:
-    call_jaxpr, params = jc.extract_call_jaxpr(eqn.primitive, eqn.params)
-    if call_jaxpr:
-      raise NotImplementedError
-    map(write, eqn.outvars, map(LazyArray, eqn.outvars))
-  for eqn in jaxpr.eqns:
-    invals = map(read, eqn.invars)
-    outvals = map(read, eqn.outvars)
-    new_eqn = jc.JaxprEqn(invals, outvals, eqn.primitive, eqn.params,
-                          eqn.source_info)
-    map(lambda arr: arr.set_eqn(new_eqn), outvals)
-  return map(read, jaxpr.outvars)
+    return body_fn
 
-def get_aval(x):
-  return x._aval if isinstance(x, LazyArray) else jc.get_aval(x)
+# Need this wrapper type because the JAX AbstractValue type is not publicly
+# exported
+class Abstract:
+    def __init__(self, aval):
+        self.aval = aval
 
-class Ones:
-  def __init__(self, shape):
-    self.shape = shape
+    @property
+    def shape(self):
+        return self.aval.shape
 
-  ndim = property(lambda self: len(self.shape))
-  size = property(lambda self: np.prod(self.shape, dtype=int))
+    @property
+    def dtype(self):
+        return self.aval.dtype
 
-  def __eq__(self, other):
-    return is_ones(other) and self.shape == other.shape
+class Deleted:
+    pass
+deleted = Deleted()
 
-def is_ones(count: Union[Array, Ones]):
-  return type(count) is Ones
+def make_init_carry(j: ClosedJaxpr):
+    jaxpr = j.jaxpr
+    carry_init = []
 
-def materialize(count: Union[Array, Ones]):
-  return np.ones(count.shape, int) if is_ones(count) else count
+    env = {}
+
+    def write(v: Var, val: Any) -> None:
+        env[v] = val
+
+    def maybe_read(v: Atom) -> Any:
+        if isinstance(v, Literal):
+            return v.val
+        elif v in env:
+            if isinstance(env[v], Deleted):
+                raise ScanConversionError(
+                    "Using scan carry output is not supported"
+                )
+            else:
+                return env[v]
+        else:
+            return Abstract(v.aval)
+    map(write, jaxpr.constvars, j.consts)
+
+    # Map from Var to scan axis
+    scanvars = dict(zip(jaxpr.invars, len(jaxpr.invars) * [0]))
+    for e in jaxpr.eqns:
+        subfuns, bind_params = e.primitive.get_bind_params(e.params)
+
+        inscanvars = [
+            (i, scanvars[v]) for (i, v) in enumerate(e.invars) if type(v)
+            is Var and v in scanvars
+        ]
+        if inscanvars:
+            # TODO: Raise NotImplementedError if rule isn't defined
+            in_avals = map(maybe_read, e.invars)
+            init, _, outscanvars, to_delete = (
+                scanify_rules[e.primitive](
+                    inscanvars, *subfuns, *in_avals, **bind_params
+                )
+            )
+            outscanvars = [(e.outvars[i], l) for i, l in outscanvars]
+            to_delete = [e.outvars[i] for i in to_delete]
+            map(write, to_delete, len(to_delete) * [deleted])
+        else:
+            in_vals = map(maybe_read, e.invars)
+            if not any(isinstance(v, Abstract) for v in in_vals):
+                subfuns, bind_params = eqn.primitive.get_bind_params(eqn.params)
+                ans = eqn.primitive.bind(
+                    *subfuns, *in_vals, **bind_params
+                )
+                if eqn.primitive.multiple_results:
+                    map(write, eqn.outvars, ans)
+                else:
+                    write(eqn.outvars[0], ans)
+            init = None
+            outscanvars = []
+
+        carry_init.append(init)
+        scanvars.update(outscanvars)
+
+    if any(o not in scanvars for o in jaxpr.outvars):
+        # TODO: More detail here...
+        raise ScanConversionError(
+            "All of the outputs of the transformed function must be "
+            "scanned over."
+        )
+    if any(scanvars[o] != 0 for o in jaxpr.outvars):
+        # TODO: ...and here.
+        raise ScanConversionError(
+            "All outputs of the transformed function must be scanned over "
+            "axis 0."
+        )
+    return carry_init
+
+class ScanConversionError(Exception):
+    pass
