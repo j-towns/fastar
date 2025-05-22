@@ -1,5 +1,5 @@
 # Contents of this file are copied, with slight modification, from
-# jax/_src/test_util.py
+# jax/_src/test_util.py and jax/_src/public_test_util.py
 
 # Copyright 2018 The JAX Authors.
 #
@@ -22,6 +22,7 @@ import numpy as np
 
 from jax import dtypes as _dtypes
 import jax
+from jax.tree_util import tree_map
 from jax import config
 
 
@@ -437,18 +438,100 @@ def rand_bool(rng):
       shape, dtype)
   return generator
 
-def check_raises(thunk, err_type, msg):
-  try:
-    thunk()
-    assert False
-  except err_type as e:
-    assert str(e).startswith(msg), f"\n{e}\n\n{msg}\n"
+def _assert_numpy_allclose(a, b, atol=None, rtol=None, err_msg=''):
+  if a.dtype == b.dtype == _dtypes.float0:
+    np.testing.assert_array_equal(a, b, err_msg=err_msg)
+    return
 
-def check_raises_regexp(thunk, err_type, pattern):
-  try:
-    thunk()
-    assert False
-  except err_type as e:
-    assert re.match(pattern, str(e)), f"{e}\n\n{pattern}\n"
+  custom_float_dtypes = [
+    _dtypes.float8_e4m3b11fnuz,
+    _dtypes.float8_e4m3fn,
+    _dtypes.float8_e4m3fnuz,
+    _dtypes.float8_e5m2,
+    _dtypes.float8_e5m2fnuz,
+    _dtypes.bfloat16,
+  ]
+
+  if _dtypes.float8_e4m3 is not None:
+    custom_float_dtypes.insert(0, _dtypes.float8_e4m3)
+  if _dtypes.float8_e3m4 is not None:
+    custom_float_dtypes.insert(0, _dtypes.float8_e3m4)
+  if _dtypes.float8_e8m0fnu is not None:
+    custom_float_dtypes.insert(0, _dtypes.float8_e8m0fnu)
+
+  def maybe_upcast(x):
+    if x.dtype in custom_float_dtypes:
+      return x.astype(np.float32)
+    # TODO(reedwm): Upcasting int2/int4 to int8 will no longer be necessary once
+    # JAX depends on a version of ml_dtypes which contains
+    # https://github.com/jax-ml/ml_dtypes/commit/348fd3704306cae97f617c38045cee6bc416bf10.
+    if x.dtype in _dtypes._intn_dtypes:
+      return x.astype(np.int8 if _dtypes.iinfo(x.dtype).min < 0 else np.uint8)
+    return x
+
+  a = maybe_upcast(a)
+  b = maybe_upcast(b)
+
+  kw = {}
+  if atol: kw["atol"] = atol
+  if rtol: kw["rtol"] = rtol
+  with np.errstate(invalid='ignore'):
+    # TODO(phawkins): surprisingly, assert_allclose sometimes reports invalid
+    # value errors. It should not do that.
+    np.testing.assert_allclose(a, b, **kw, err_msg=err_msg)
+
+_default_tolerance = {
+    _dtypes.float0: 0,
+    np.dtype(np.bool_): 0,
+    np.dtype(_dtypes.int4): 0,
+    np.dtype(np.int8): 0,
+    np.dtype(np.int16): 0,
+    np.dtype(np.int32): 0,
+    np.dtype(np.int64): 0,
+    np.dtype(_dtypes.uint4): 0,
+    np.dtype(np.uint8): 0,
+    np.dtype(np.uint16): 0,
+    np.dtype(np.uint32): 0,
+    np.dtype(np.uint64): 0,
+    np.dtype(_dtypes.float8_e4m3b11fnuz): 1e-1,
+    np.dtype(_dtypes.float8_e4m3fn): 1e-1,
+    np.dtype(_dtypes.float8_e4m3fnuz): 1e-1,
+    np.dtype(_dtypes.float8_e5m2): 1e-1,
+    np.dtype(_dtypes.float8_e5m2fnuz): 1e-1,
+    np.dtype(_dtypes.bfloat16): 1e-2,
+    np.dtype(np.float16): 1e-3,
+    np.dtype(np.float32): 1e-6,
+    np.dtype(np.float64): 1e-15,
+    np.dtype(np.complex64): 1e-6,
+    np.dtype(np.complex128): 1e-15,
+}
+
+if _dtypes.int2 is not None:
+  assert _dtypes.uint2 is not None
+  _default_tolerance[np.dtype(_dtypes.int2)] = 0
+  _default_tolerance[np.dtype(_dtypes.uint2)] = 0
+
+def default_tolerance():
+  return _default_tolerance
+
+def tolerance(dtype, tol=None):
+  tol = {} if tol is None else tol
+  if not isinstance(tol, dict):
+    return tol
+  tol = {np.dtype(key): value for key, value in tol.items()}
+  dtype = _dtypes.canonicalize_dtype(np.dtype(dtype))
+  return tol.get(dtype, default_tolerance()[dtype])
+
+def _assert_numpy_close(a, b, atol=None, rtol=None, err_msg=''):
+  a, b = np.asarray(a), np.asarray(b)
+  assert a.shape == b.shape
+  atol = max(tolerance(a.dtype, atol), tolerance(b.dtype, atol))
+  rtol = max(tolerance(a.dtype, rtol), tolerance(b.dtype, rtol))
+  _assert_numpy_allclose(a, b, atol=atol * a.size, rtol=rtol * b.size,
+                         err_msg=err_msg)
 
 
+def check_close(xs, ys, atol=None, rtol=None, err_msg=''):
+  assert_close = partial(_assert_numpy_close, atol=atol, rtol=rtol,
+                         err_msg=err_msg)
+  tree_map(assert_close, xs, ys)
