@@ -21,6 +21,7 @@ import re
 import numpy as np
 
 from jax import dtypes as _dtypes
+import ml_dtypes
 import jax
 from jax.tree_util import tree_map
 from jax import config
@@ -45,14 +46,14 @@ def supported_dtypes():
   if device_under_test() == "tpu":
     types = {np.bool_, np.int8, np.int16, np.int32, np.uint8, np.uint16,
              np.uint32, _dtypes.bfloat16, np.float16, np.float32, np.complex64,
-             _dtypes.float8_e4m3fn, _dtypes.float8_e4m3b11fnuz,
-             _dtypes.float8_e5m2}
+             ml_dtypes.float8_e4m3fn, ml_dtypes.float8_e4m3b11fnuz,
+             ml_dtypes.float8_e5m2}
   elif device_under_test() == "gpu":
     types = {np.bool_, np.int8, np.int16, np.int32, np.int64,
              np.uint8, np.uint16, np.uint32, np.uint64,
              _dtypes.bfloat16, np.float16, np.float32, np.float64,
-             np.complex64, np.complex128, _dtypes.float8_e4m3fn,
-             _dtypes.float8_e5m2}
+             np.complex64, np.complex128, ml_dtypes.float8_e4m3fn,
+             ml_dtypes.float8_e5m2}
   elif device_under_test() == "METAL":
     types = {np.int32, np.uint32, np.float32}
   else:
@@ -78,18 +79,18 @@ class _LazyDtypes:
   def custom_floats(self):
     float_dtypes = [
       _dtypes.bfloat16,
-      _dtypes.float8_e4m3b11fnuz,
-      _dtypes.float8_e4m3fn,
-      _dtypes.float8_e4m3fnuz,
-      _dtypes.float8_e5m2,
-      _dtypes.float8_e5m2fnuz,
+      ml_dtypes.float8_e4m3b11fnuz,
+      ml_dtypes.float8_e4m3fn,
+      ml_dtypes.float8_e4m3fnuz,
+      ml_dtypes.float8_e5m2,
+      ml_dtypes.float8_e5m2fnuz,
     ]
-    if _dtypes.float8_e3m4 is not None:
-      float_dtypes += [_dtypes.float8_e3m4]
-    if _dtypes.float8_e4m3 is not None:
-      float_dtypes += [_dtypes.float8_e4m3]
-    if _dtypes.float8_e8m0fnu is not None:
-      float_dtypes += [_dtypes.float8_e8m0fnu]
+    if ml_dtypes.float8_e3m4 is not None:
+      float_dtypes += [ml_dtypes.float8_e3m4]
+    if ml_dtypes.float8_e4m3 is not None:
+      float_dtypes += [ml_dtypes.float8_e4m3]
+    if ml_dtypes.float8_e8m0fnu is not None:
+      float_dtypes += [ml_dtypes.float8_e8m0fnu]
     return self.supported(float_dtypes)
 
   @_cached_property
@@ -444,20 +445,20 @@ def _assert_numpy_allclose(a, b, atol=None, rtol=None, err_msg=''):
     return
 
   custom_float_dtypes = [
-    _dtypes.float8_e4m3b11fnuz,
-    _dtypes.float8_e4m3fn,
-    _dtypes.float8_e4m3fnuz,
-    _dtypes.float8_e5m2,
-    _dtypes.float8_e5m2fnuz,
-    _dtypes.bfloat16,
+    ml_dtypes.float8_e4m3b11fnuz,
+    ml_dtypes.float8_e4m3fn,
+    ml_dtypes.float8_e4m3fnuz,
+    ml_dtypes.float8_e5m2,
+    ml_dtypes.float8_e5m2fnuz,
+    ml_dtypes.bfloat16,
   ]
 
-  if _dtypes.float8_e4m3 is not None:
-    custom_float_dtypes.insert(0, _dtypes.float8_e4m3)
-  if _dtypes.float8_e3m4 is not None:
-    custom_float_dtypes.insert(0, _dtypes.float8_e3m4)
-  if _dtypes.float8_e8m0fnu is not None:
-    custom_float_dtypes.insert(0, _dtypes.float8_e8m0fnu)
+  if ml_dtypes.float8_e4m3 is not None:
+    custom_float_dtypes.insert(0, ml_dtypes.float8_e4m3)
+  if ml_dtypes.float8_e3m4 is not None:
+    custom_float_dtypes.insert(0, ml_dtypes.float8_e3m4)
+  if ml_dtypes.float8_e8m0fnu is not None:
+    custom_float_dtypes.insert(0, ml_dtypes.float8_e8m0fnu)
 
   def maybe_upcast(x):
     if x.dtype in custom_float_dtypes:
@@ -465,7 +466,8 @@ def _assert_numpy_allclose(a, b, atol=None, rtol=None, err_msg=''):
     # TODO(reedwm): Upcasting int2/int4 to int8 will no longer be necessary once
     # JAX depends on a version of ml_dtypes which contains
     # https://github.com/jax-ml/ml_dtypes/commit/348fd3704306cae97f617c38045cee6bc416bf10.
-    if x.dtype in _dtypes._intn_dtypes:
+    if x.dtype in [np.dtype(ml_dtypes.int2), np.dtype(ml_dtypes.uint2),
+                   np.dtype(ml_dtypes.int4), np.dtype(ml_dtypes.uint4)]:
       return x.astype(np.int8 if _dtypes.iinfo(x.dtype).min < 0 else np.uint8)
     return x
 
@@ -483,21 +485,21 @@ def _assert_numpy_allclose(a, b, atol=None, rtol=None, err_msg=''):
 _default_tolerance = {
     _dtypes.float0: 0,
     np.dtype(np.bool_): 0,
-    np.dtype(_dtypes.int4): 0,
+    np.dtype(ml_dtypes.int4): 0,
     np.dtype(np.int8): 0,
     np.dtype(np.int16): 0,
     np.dtype(np.int32): 0,
     np.dtype(np.int64): 0,
-    np.dtype(_dtypes.uint4): 0,
+    np.dtype(ml_dtypes.uint4): 0,
     np.dtype(np.uint8): 0,
     np.dtype(np.uint16): 0,
     np.dtype(np.uint32): 0,
     np.dtype(np.uint64): 0,
-    np.dtype(_dtypes.float8_e4m3b11fnuz): 1e-1,
-    np.dtype(_dtypes.float8_e4m3fn): 1e-1,
-    np.dtype(_dtypes.float8_e4m3fnuz): 1e-1,
-    np.dtype(_dtypes.float8_e5m2): 1e-1,
-    np.dtype(_dtypes.float8_e5m2fnuz): 1e-1,
+    np.dtype(ml_dtypes.float8_e4m3b11fnuz): 1e-1,
+    np.dtype(ml_dtypes.float8_e4m3fn): 1e-1,
+    np.dtype(ml_dtypes.float8_e4m3fnuz): 1e-1,
+    np.dtype(ml_dtypes.float8_e5m2): 1e-1,
+    np.dtype(ml_dtypes.float8_e5m2fnuz): 1e-1,
     np.dtype(_dtypes.bfloat16): 1e-2,
     np.dtype(np.float16): 1e-3,
     np.dtype(np.float32): 1e-6,
@@ -506,10 +508,10 @@ _default_tolerance = {
     np.dtype(np.complex128): 1e-15,
 }
 
-if _dtypes.int2 is not None:
-  assert _dtypes.uint2 is not None
-  _default_tolerance[np.dtype(_dtypes.int2)] = 0
-  _default_tolerance[np.dtype(_dtypes.uint2)] = 0
+if ml_dtypes.int2 is not None:
+  assert ml_dtypes.uint2 is not None
+  _default_tolerance[np.dtype(ml_dtypes.int2)] = 0
+  _default_tolerance[np.dtype(ml_dtypes.uint2)] = 0
 
 def default_tolerance():
   return _default_tolerance

@@ -48,73 +48,111 @@ def batch_scanify_rule(op, inscanvars, *in_avals, **bind_params):
     return init, body_fun, [(0, axis)], []
 
 nary_ops = [
-    lax.convert_element_type_p,
-    lax.lt_p,
-    lax.le_p,
-    lax.gt_p,
-    lax.ge_p,
-    lax.ne_p,
-    lax.eq_p,
-    lax.shift_right_logical_p,
-    lax.shift_right_arithmetic_p,
-    lax.shift_left_p,
-    lax.min_p,
-    lax.max_p,
-    lax.rem_p,
-    lax.div_p,
-    lax.mul_p,
-    lax.sub_p,
-    lax.add_p,
-    lax.population_count_p,
-    lax.xor_p,
-    lax.or_p,
-    lax.and_p,
-    lax.not_p,
-    lax.pow_p,
-    lax.rsqrt_p,
-    lax.sqrt_p,
     lax.abs_p,
-    lax.conj_p,
-    lax.complex_p,
-    lax.imag_p,
-    lax.real_p,
-    lax.erf_inv_p,
-    lax.erfc_p,
-    lax.erf_p,
-    lax.bessel_i1e_p,
+    lax.acos_p,
+    lax.acosh_p,
+    lax.add_p,
+    lax.and_p,
+    lax.asin_p,
+    lax.asinh_p,
+    lax.atan_p,
+    lax.atan2_p,
+    lax.atanh_p,
     lax.bessel_i0e_p,
-    lax.igammac_p,
+    lax.bessel_i1e_p,
+    lax.cbrt_p,
+    lax.ceil_p,
+    lax.clz_p,
+    lax.complex_p,
+    lax.conj_p,
+    lax.convert_element_type_p,
+    lax.cos_p,
+    lax.cosh_p,
+    lax.digamma_p,
+    lax.div_p,
+    lax.eq_p,
+    lax.erf_inv_p,
+    lax.erf_p,
+    lax.erfc_p,
+    lax.exp_p,
+    lax.exp2_p,
+    lax.expm1_p,
+    lax.floor_p,
+    lax.ge_p,
+    lax.gt_p,
     lax.igamma_grad_a_p,
     lax.igamma_p,
-    lax.digamma_p,
-    lax.lgamma_p,
-    lax.regularized_incomplete_beta_p,
-    lax.atanh_p,
-    lax.acosh_p,
-    lax.asinh_p,
-    lax.cosh_p,
-    lax.sinh_p,
-    lax.atan2_p,
-    lax.cos_p,
-    lax.sin_p,
-    lax.tanh_p,
-    lax.log1p_p,
-    lax.expm1_p,
-    lax.log_p,
-    lax.exp_p,
-    lax.is_finite_p,
-    lax.round_p,
-    lax.ceil_p,
-    lax.floor_p,
-    lax.nextafter_p,
-    lax.sign_p,
-    lax.neg_p,
-    lax.select_n_p,
+    lax.igammac_p,
+    lax.imag_p,
     lax.integer_pow_p,
+    lax.is_finite_p,
+    lax.le_p,
+    lax.lgamma_p,
+    lax.log_p,
+    lax.log1p_p,
+    lax.logistic_p,
+    lax.lt_p,
+    lax.max_p,
+    lax.min_p,
+    lax.mul_p,
+    lax.ne_p,
+    lax.neg_p,
+    lax.nextafter_p,
+    lax.not_p,
+    lax.or_p,
+    lax.polygamma_p,
+    lax.population_count_p,
+    lax.pow_p,
+    lax.real_p,
+    lax.regularized_incomplete_beta_p,
+    lax.rem_p,
+    lax.round_p,
+    lax.rsqrt_p,
+    lax.select_n_p,
+    lax.shift_left_p,
+    lax.shift_right_arithmetic_p,
+    lax.shift_right_logical_p,
+    lax.sign_p,
+    lax.sin_p,
+    lax.sinh_p,
+    lax.sqrt_p,
+    lax.square_p,
+    lax.sub_p,
+    lax.tan_p,
+    lax.tanh_p,
+    lax.xor_p,
+    lax.zeta_p,
 ]
 
+def nary_op_scanify_rule(op, inscanvars, *avals, **kwargs):
+    argnums, axes = unzip2(inscanvars)
+    axis = axes[0]
+    if not all(a == axis for a in axes[1:]):
+        #TODO: more detail
+        raise ScanConversionError(
+            "All scanned inputs to nary op must be scanned along same axis"
+        )
+    if (any(avals[n].shape[axis] == 1 for n in argnums)
+        and any(a.shape[axis] > 1 for a in avals)):
+        #TODO: more detail
+        raise ScanConversionError(
+            "Broadcasting scanned variable along scanned axis is not "
+            "supported"
+        )
+    if all(a.shape[axis] == 1 for i, a in enumerate(avals) if i not in argnums):
+        return batch_scanify_rule(op, inscanvars, *avals, **kwargs)
+    init = 0
+    def body_fn(counter, *args):
+        args = [
+            a if i in argnums else lax.dynamic_index_in_dim(
+                a, counter, axis, False
+            ) for i, a in enumerate(args)
+        ]
+        return counter + 1, op.bind(*args, **kwargs)
+    return init, body_fn, [(0, axis)], []
+
 for op in nary_ops:
-    register_scanify_rule(op, partial(batch_scanify_rule, op))
+    register_scanify_rule(op, partial(nary_op_scanify_rule, op))
 
 reduce_ops = [
   lax.reduce_sum_p,

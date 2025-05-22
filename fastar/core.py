@@ -126,14 +126,14 @@ def make_scan(j: ClosedJaxpr):
         else:
             in_vals = map(maybe_read, e.invars)
             if not any(isinstance(v, Abstract) for v in in_vals):
-                subfuns, bind_params = eqn.primitive.get_bind_params(eqn.params)
-                ans = eqn.primitive.bind(
+                subfuns, bind_params = e.primitive.get_bind_params(e.params)
+                ans = e.primitive.bind(
                     *subfuns, *in_vals, **bind_params
                 )
-                if eqn.primitive.multiple_results:
-                    map(write, eqn.outvars, ans)
+                if e.primitive.multiple_results:
+                    map(write, e.outvars, ans)
                 else:
-                    write(eqn.outvars[0], ans)
+                    write(e.outvars[0], ans)
 
     if any(o not in scanvars for o in jaxpr.outvars):
         # TODO: More detail here...
