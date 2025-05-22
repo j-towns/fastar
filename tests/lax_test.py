@@ -1,6 +1,6 @@
 import collections
 
-from fastar import lax_test_util
+from fastar import jax_test_util
 from fastar.util import safe_map, safe_zip
 
 from jax import lax
