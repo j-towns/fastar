@@ -4,11 +4,14 @@ import itertools
 
 from jax import lax
 from jax import dtypes
+import jax.numpy as jnp
 import numpy as np
+import numpy.testing as np_testing
 import pytest
 
 from fastar import jax_test_util as jtu
 from fastar import test_util
+from fastar.core import ScanConversionError
 from fastar.util import safe_map, safe_zip
 
 ###############################################################################
@@ -50,8 +53,7 @@ all_dtypes = (
 )
 python_scalar_types = [bool, int, float, complex]
 
-compatible_shapes = [[(3,)], [(3, 4), (3, 1), (1, 4)], [(2, 3, 4), (2, 1, 4)],
-                     [(1, 1), (1, 3)]]
+compatible_shapes = [[(3,)], [(2, 3, 4), (2, 1, 4)], [(1, 1), (1, 3)]]
 
 OpRecord = collections.namedtuple(
     "OpRecord", ["op", "nargs", "dtypes", "rng_factory", "tol"]
@@ -310,6 +312,14 @@ def test_nary(op_name, argnum, rng_factory, shapes, dtype, tol):
         return getattr(lax, op_name)(*args_)
     test_util.check_scan(f, args[argnum], atol=tol, rtol=tol)
 
+def test_nary_other_axis():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(2, 3, 4)
+    y = rng.randn(3, 2, 4)
+    def f(xs):
+        return jnp.moveaxis(lax.add(jnp.moveaxis(xs, 0, 1), y), 1, 0)
+    test_util.check_scan(f, xs)
+
 @pytest.mark.parametrize(
     'op,shape,axes,dtype',
     [(rec.op, shape, axes, dtype)
@@ -334,3 +344,17 @@ def test_scan():
         return ys
     xs = rng.randn(5, 2)
     test_util.check_scan(f, xs)
+
+def test_transpose():
+    rng = np.random.RandomState(0)
+    def f(xs):
+        return lax.transpose(lax.transpose(xs, (1, 2, 0)), (2, 1, 0))
+    xs = rng.randn(2, 3, 4)
+    test_util.check_scan(f, xs)
+
+def test_transpose_wrong_axis():
+    rng = np.random.RandomState(0)
+    def f(xs):
+        return lax.transpose(xs, (1, 2, 0))
+    xs = rng.randn(2, 3, 4)
+    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, xs)

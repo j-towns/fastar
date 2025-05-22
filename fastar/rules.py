@@ -239,6 +239,26 @@ def broadcast_in_dim_scanify_rule(inscanvars, operand, shape,
     )
 register_scanify_rule(lax.broadcast_in_dim_p, broadcast_in_dim_scanify_rule)
 
+def _perm_inverse(p):
+    p = np.asarray(p)
+    s = np.empty_like(p)
+    s[p] = np.arange(len(p))
+    return s
+
+def transpose_scanify_rule(inscanvars, operand, permutation):
+    [(argnum, in_axis)] = inscanvars
+    assert argnum == 0
+    carry_init = None
+    out_axis = _perm_inverse(permutation)[in_axis]
+    def body_fn(carry, x):
+        return None, lax.squeeze(
+            lax.transpose(
+                jnp.expand_dims(x, in_axis), permutation
+            ), [out_axis]
+        )
+    return None, body_fn, [(0, out_axis)], []
+register_scanify_rule(lax.transpose_p, transpose_scanify_rule)
+
 #def conv_general_dilated_scanify_rule(
 #    inscanvars, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
 #    dimension_numbers, feature_group_count, batch_group_count, precision,
