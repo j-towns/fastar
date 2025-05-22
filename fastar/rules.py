@@ -259,60 +259,82 @@ def transpose_scanify_rule(inscanvars, operand, permutation):
     return None, body_fn, [(0, out_axis)], []
 register_scanify_rule(lax.transpose_p, transpose_scanify_rule)
 
-#def conv_general_dilated_scanify_rule(
-#    inscanvars, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
-#    dimension_numbers, feature_group_count, batch_group_count, precision,
-#    preferred_element_type
-#):
-#    inscan_argnums, inscan_axes = unzip2(inscanvars)
-#    if lhs.ndim > 3:
-#        raise ScanConversionError(
-#            "Conv with spatial dimension > 1 not yet supported."
-#        )
-#    if 1 in inscan_argnums:
-#        raise ScanConversionError(
-#            "Global scan is not currently supported over rhs of "
-#            "conv_general_dilated."
-#        )
-#    [inscan_axis] = inscan_axes
-#    if inscan_axis == dimension_numbers.lhs_spec[0]:
-#        if batch_group_count > 1:
-#            raise ScanConversionError(
-#                "Global scan is not yet supported over conv lhs batch axis "
-#                "with batch_group_count > 1"
-#            )
-#        return lax.conv_general_dilated_p.bind(
-#            lhs, rhs, window_strides=window_strides, padding=padding,
-#            lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
-#            dimension_numbers=dimension_numbers,
-#            feature_group_count=feature_group_count,
-#            batch_group_count=batch_group_count, precision=precision,
-#            preferred_element_type=preferred_element_type
-#        ), [(0, dimension_numbers.out_spec[0])]
-#    if inscan_axis == dimension_numbers.lhs_spec[1]:
-#        raise ScanConversionError(
-#            "Global scan along feature dimension of conv lhs is not "
-#            "supported."
-#        )
-#    assert inscan_axis == dimension_numbers.lhs_spec[2]
-#    window_strides, = window_strides
-#    if window_strides > 1:
-#        raise ScanConversionError(
-#            "Window strides > 1 not yet supported in conv."
-#        )
-#    window_size = rhs.shape[dimension_numbers.rhs_spec[2]]
-#    if padding != ((window_size - 1, 0),):
-#        raise ScanConversionError(
-#            "Only causal padding is supported in conv."
-#        )
-#    if lhs_dilation != (1,):
-#        raise ScanConversionError(
-#            "lhs_dilation > 1 not yet supported in conv."
-#        )
-#    if rhs_dilation != (1,):
-#        raise ScanConversionError(
-#            "rhs_dilation > 1 not yet supported in conv."
-#        )
-#    from IPython.terminal.debugger import set_trace; set_trace()
-#register_scanify_rule(lax.conv_general_dilated_p,
-#                      conv_general_dilated_scanify_rule)
+def conv_general_dilated_scanify_rule(
+    inscanvars, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
+    dimension_numbers, feature_group_count, batch_group_count, precision,
+    preferred_element_type
+):
+    inscan_argnums, inscan_axes = unzip2(inscanvars)
+    if 1 in inscan_argnums:
+        raise ScanConversionError(
+            "Global scan is not currently supported over rhs of "
+            "conv_general_dilated."
+        )
+    [inscan_axis] = inscan_axes
+    if inscan_axis == dimension_numbers.lhs_spec[0]:
+        if batch_group_count > 1:
+            raise ScanConversionError(
+                "Global scan is not yet supported over conv lhs batch axis "
+                "with batch_group_count > 1"
+            )
+        return batch_scanify_rule(lax.conv_general_dilated_p, inscanvars,
+            lhs, rhs, window_strides=window_strides, padding=padding,
+            lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
+            dimension_numbers=dimension_numbers,
+            feature_group_count=feature_group_count,
+            batch_group_count=batch_group_count, precision=precision,
+            preferred_element_type=preferred_element_type
+        )
+    if lhs.ndim > 3:
+        raise ScanConversionError(
+            "Converting conv with spatial dimension > 1 not yet supported."
+        )
+    if inscan_axis == dimension_numbers.lhs_spec[1]:
+        raise ScanConversionError(
+            "Global scan along feature dimension of conv lhs is not "
+            "supported."
+        )
+    assert inscan_axis == dimension_numbers.lhs_spec[2]
+    outscan_axis = dimension_numbers.out_spec[2]
+    window_stride, = window_strides
+    if window_stride > 1:
+        raise ScanConversionError(
+            "Window strides > 1 not yet supported in conv."
+        )
+    window_size = rhs.shape[dimension_numbers.rhs_spec[2]]
+    if padding != ((window_size - 1, 0),):
+        raise ScanConversionError(
+            "Only causal padding is supported in conv."
+        )
+    if lhs_dilation != (1,):
+        raise ScanConversionError(
+            "lhs_dilation > 1 not yet supported in conv."
+        )
+    if rhs_dilation != (1,):
+        raise ScanConversionError(
+            "rhs_dilation > 1 not yet supported in conv."
+        )
+    carry_shape = list(lhs.shape)
+    carry_shape[inscan_axis] = window_size - 1
+    carry_init = jnp.zeros(carry_shape, lhs.dtype)
+    def body_fn(carry, x, rhs):
+        lhs = lax.concatenate(
+            [carry, jnp.expand_dims(x, inscan_axis)],
+            inscan_axis
+        )
+        out = lax.conv_general_dilated(
+            lhs, rhs, window_strides=window_strides, padding="VALID",
+            lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
+            dimension_numbers=dimension_numbers,
+            feature_group_count=feature_group_count,
+            batch_group_count=batch_group_count, precision=precision,
+            preferred_element_type=preferred_element_type,
+        )
+        out = lax.squeeze(out, [outscan_axis])
+        carry_new = lax.slice_in_dim(lhs, 1, window_size, 1, inscan_axis)
+        return carry_new, out
+    return carry_init, body_fn, [(0, outscan_axis)], []
+
+register_scanify_rule(
+    lax.conv_general_dilated_p, conv_general_dilated_scanify_rule
+)

@@ -70,6 +70,10 @@ class Abstract:
     def dtype(self):
         return self.aval.dtype
 
+    @property
+    def ndim(self):
+        return self.aval.ndim
+
 class Deleted:
     pass
 deleted = Deleted()

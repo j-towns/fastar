@@ -358,3 +358,26 @@ def test_transpose_wrong_axis():
         return lax.transpose(xs, (1, 2, 0))
     xs = rng.randn(2, 3, 4)
     np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, xs)
+
+def test_conv_batch():
+    rng = np.random.RandomState(0)
+    lhs = rng.randn(2, 3, 4, 5)
+    rhs = rng.randn(1, 2, 5, 6)
+    def f(x):
+        return lax.conv_general_dilated(
+            x, rhs, window_strides=[1, 1], padding="VALID",
+            dimension_numbers=("NHWC", "HWIO", "NHWC"),
+        )
+    test_util.check_scan(f, lhs)
+
+def test_conv_causal():
+    window_size = 2
+    rng = np.random.RandomState(0)
+    lhs = rng.randn(6, 4, 5)
+    rhs = rng.randn(window_size, 5, 6)
+    def f(x):
+        return lax.conv_general_dilated(
+            x, rhs, window_strides=[1], padding=[(window_size - 1, 0)],
+            dimension_numbers=("TNC", "TIO", "TNC"),
+        )
+    test_util.check_scan(f, lhs)
