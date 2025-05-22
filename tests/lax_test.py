@@ -323,3 +323,14 @@ def test_reduce_named(op, shape, axes, dtype):
     arg = rng(shape, dtype)
     fun = functools.partial(op, axes=axes)
     test_util.check_scan(fun, arg)
+
+def test_scan():
+    rng = np.random.RandomState(0)
+    init_carry = np.zeros(2)
+    def f(xs):
+        carry_out, ys = lax.scan(
+            lambda carry, x: (carry + x, carry + x), init_carry, xs
+        )
+        return ys
+    xs = rng.randn(5, 2)
+    test_util.check_scan(f, xs)
