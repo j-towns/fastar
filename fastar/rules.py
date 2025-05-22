@@ -186,11 +186,14 @@ def broadcast_in_dim_scanify_rule(inscanvars, operand, shape,
         raise ScanConversionError(
             "Sharding in broadcast_in_dim not yet supported."
         )
-    if (operand.shape[inscan_axis] == 1
-        and shape[broadcast_dimensions[inscan_axis]] > 1):
+    if (operand.shape[inscan_axis]
+            < shape[broadcast_dimensions[inscan_axis]]):
         raise ScanConversionError(
             "Global scan along broadcasting axis is not supported."
         )
+    shape = list(shape)
+    shape[broadcast_dimensions[inscan_axis]] = 1
+    shape = tuple(shape)
     return batch_scanify_rule(
         lax.broadcast_in_dim_p, inscanvars, operand, shape=shape,
         broadcast_dimensions=broadcast_dimensions, sharding=sharding

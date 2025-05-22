@@ -47,7 +47,7 @@
 # Notes 16/5/2025
 # Just hit an issue because the rules are currently applied during init and
 # during the body fun, with differently shaped scanned arguments (during body
-# fun the scanned axis has been removed). I'm not wondering whether we should
+# fun the scanned axis has been removed). I'm now wondering whether we should
 # refactor the core to have one function doing what make_body and
 # make_init_carry currently do. This could do an an initial pass through the
 # jaxpr building up the init carry and a list of local body funs, then create a
