@@ -10,7 +10,7 @@ map = safe_map
 zip = safe_zip
 
 
-def check_scan(f, xs):
+def check_scan(f, xs, atol=None, rtol=None):
     body_fn, carry_init = as_scan(f, xs)
     carry_out, ys = lax.scan(body_fn, carry_init, xs)
-    check_close(f(xs), ys)
+    check_close(f(xs), ys, atol=atol, rtol=rtol)

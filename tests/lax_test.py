@@ -62,92 +62,6 @@ def op_record(op, nargs, dtypes, rng_factory, tol=None):
   return OpRecord(op, nargs, dtypes, rng_factory, tol)
 
 
-ReducerOpRecord = collections.namedtuple(
-    "ReducerOpRecord", ["op", "reference_op", "init_val", "dtypes", "primitive"]
-)
-
-
-def lax_reduce_ops():
-  return [
-      ReducerOpRecord(lax.add, np.add, 0, default_dtypes, lax.reduce_sum_p),
-      ReducerOpRecord(
-          lax.mul, np.multiply, 1, default_dtypes, lax.reduce_prod_p
-      ),
-      ReducerOpRecord(
-          lax.max, np.maximum, 0, uint_dtypes + bool_dtypes, lax.reduce_max_p
-      ),
-      ReducerOpRecord(
-          lax.max, np.maximum, -np.inf, float_dtypes, lax.reduce_max_p
-      ),
-      ReducerOpRecord(
-          lax.max,
-          np.maximum,
-          dtypes.iinfo(np.int32).min,
-          [np.int32],
-          lax.reduce_max_p,
-      ),
-      ReducerOpRecord(
-          lax.max,
-          np.maximum,
-          dtypes.iinfo(np.int64).min,
-          [np.int64],
-          lax.reduce_max_p,
-      ),
-      ReducerOpRecord(
-          lax.min, np.minimum, np.inf, float_dtypes, lax.reduce_min_p
-      ),
-      ReducerOpRecord(
-          lax.min,
-          np.minimum,
-          dtypes.iinfo(np.int32).max,
-          [np.int32],
-          lax.reduce_min_p,
-      ),
-      ReducerOpRecord(
-          lax.min,
-          np.minimum,
-          dtypes.iinfo(np.int64).max,
-          [np.int64],
-          lax.reduce_min_p,
-      ),
-      ReducerOpRecord(
-          lax.min,
-          np.minimum,
-          dtypes.iinfo(np.uint32).max,
-          [np.uint32],
-          lax.reduce_min_p,
-      ),
-      ReducerOpRecord(
-          lax.min,
-          np.minimum,
-          dtypes.iinfo(np.uint64).max,
-          [np.uint64],
-          lax.reduce_min_p,
-      ),
-      ReducerOpRecord(
-          lax.bitwise_and,
-          np.bitwise_and,
-          -1,
-          int_dtypes + uint_dtypes + bool_dtypes,
-          lax.reduce_and_p,
-      ),
-      ReducerOpRecord(
-          lax.bitwise_or,
-          np.bitwise_or,
-          0,
-          int_dtypes + uint_dtypes + bool_dtypes,
-          lax.reduce_or_p,
-      ),
-      ReducerOpRecord(
-          lax.bitwise_xor,
-          np.bitwise_xor,
-          0,
-          int_dtypes + uint_dtypes + bool_dtypes,
-          lax.reduce_xor_p,
-      ),
-  ]
-
-
 NamedReducerOpRecord = collections.namedtuple(
     "NamedReducerOpRecord", ["op", "reference_op", "dtypes"]
 )
@@ -394,4 +308,18 @@ def test_nary(op_name, argnum, rng_factory, shapes, dtype, tol):
         args_ = list(args)
         args_[argnum] = xs
         return getattr(lax, op_name)(*args_)
-    test_util.check_scan(f, args[argnum])
+    test_util.check_scan(f, args[argnum], atol=tol, rtol=tol)
+
+@pytest.mark.parametrize(
+    'op,shape,axes,dtype',
+    [(rec.op, shape, axes, dtype)
+     for rec in lax_named_reduce_ops()
+     for (shape, axes) in [[(3, 4, 5), (1,)], [(3, 4, 5), (1, 2)]]
+     for dtype in rec.dtypes])
+def test_reduce_named(op, shape, axes, dtype):
+    rng_factory = (jtu.rand_default if dtypes.issubdtype(dtype, np.integer)
+                   else jtu.rand_small)
+    rng = rng_factory(np.random)
+    arg = rng(shape, dtype)
+    fun = functools.partial(op, axes=axes)
+    test_util.check_scan(fun, arg)

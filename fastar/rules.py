@@ -155,14 +155,15 @@ for op in nary_ops:
     register_scanify_rule(op, partial(nary_op_scanify_rule, op))
 
 reduce_ops = [
-  lax.reduce_sum_p,
-  lax.reduce_prod_p,
-  lax.reduce_max_p,
-  lax.reduce_min_p,
-  lax.reduce_or_p,
-  lax.reduce_and_p,
-  lax.argmax_p,
-  lax.argmin_p,
+    lax.reduce_sum_p,
+    lax.reduce_prod_p,
+    lax.reduce_max_p,
+    lax.reduce_min_p,
+    lax.reduce_or_p,
+    lax.reduce_and_p,
+    lax.reduce_xor_p,
+    lax.argmax_p,
+    lax.argmin_p,
 ]
 def reduce_scanify_rule(op, inscanvars, xs_aval, axes):
     _, [inscan_axis] = unzip2(inscanvars)
