@@ -139,7 +139,8 @@ def nary_op_scanify_rule(op, inscanvars, *avals, **kwargs):
             "Broadcasting scanned variable along scanned axis is not "
             "supported"
         )
-    if all(a.shape[axis] == 1 for i, a in enumerate(avals) if i not in argnums):
+    if all(a.ndim == 0 or a.shape[axis] == 1
+           for i, a in enumerate(avals) if i not in argnums):
         return batch_scanify_rule(op, inscanvars, *avals, **kwargs)
     init = 0
     def body_fn(counter, *args):
@@ -322,6 +323,7 @@ def conv_general_dilated_scanify_rule(
             [carry, jnp.expand_dims(x, inscan_axis)],
             inscan_axis
         )
+        # TODO: Consider using a dot instead of conv
         out = lax.conv_general_dilated(
             lhs, rhs, window_strides=window_strides, padding="VALID",
             lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
