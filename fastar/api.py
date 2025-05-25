@@ -6,7 +6,6 @@ from fastar import core
 
 def as_scan(f, xs):
     traced = jit(f).trace(xs)
-    traced.in_tree
     body_fn_flat, init_carry = core.make_scan(traced.jaxpr)
     def body_fn(carry, xs):
         xs_flat, in_tree = tree.flatten(((xs,), {}))
