@@ -10,26 +10,13 @@ from fastar.core import register_scanify_rule, ScanConversionError
 map = safe_map
 zip = safe_zip
 
+
 def all_equal(xs):
     if len(xs) == 0:
         return True
     else:
         x, *xs = xs
         return all(y == x for y in xs)
-
-def interleave_scanvars(argnums, consts, xs):
-    assert len(argums) == len(xs)
-    consts_cntr = 0
-    xs_cntr = 0
-    res = []
-    for argnum in range(len(consts) + len(xs)):
-        if argnum in argnums:
-            res.append(xs[xs_cntr])
-            xs_cntr = xs_cntr + 1
-        else:
-            res.append(consts[consts_cntr])
-            consts_cntr = consts_cntr + 1
-    return res
 
 def batch_scanify_rule(op, inscanvars, *in_avals, **bind_params):
     # Used when scanning along a batch dimension of op
