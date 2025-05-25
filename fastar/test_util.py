@@ -1,6 +1,3 @@
-from itertools import chain
-from random import shuffle
-import numpy as np
 from jax import lax
 from fastar.jax_test_util import check_close
 from fastar.util import safe_map, safe_zip

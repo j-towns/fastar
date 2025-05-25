@@ -16,7 +16,6 @@
 # limitations under the License.
 from functools import partial
 import math
-import re
 
 import numpy as np
 

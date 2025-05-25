@@ -26,7 +26,7 @@ def batch_scanify_rule(op, inscanvars, *in_avals, **bind_params):
     axis = scanvar_axes[0]
     init = None
     def body_fun(carry, *args):
-        assert carry == None
+        assert carry is None
         args = list(args)
         for argnum, axis in inscanvars:
             args[argnum] = jnp.expand_dims(args[argnum], axis)
@@ -115,13 +115,13 @@ def nary_op_scanify_rule(op, inscanvars, *avals, **kwargs):
     argnums, axes = unzip2(inscanvars)
     axis = axes[0]
     if not all(a == axis for a in axes[1:]):
-        #TODO: more detail
+        # TODO: more detail
         raise ScanConversionError(
             "All scanned inputs to nary op must be scanned along same axis"
         )
     if (any(avals[n].shape[axis] == 1 for n in argnums)
-        and any(a.shape[axis] > 1 for a in avals)):
-        #TODO: more detail
+            and any(a.shape[axis] > 1 for a in avals)):
+        # TODO: more detail
         raise ScanConversionError(
             "Broadcasting scanned variable along scanned axis is not "
             "supported"
@@ -184,10 +184,9 @@ def scan_scanify_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
         raise ScanConversionError(
             "Mismatch between global scan axis and scan axis"
         )
-    consts, carry, xs = (
+    consts, carry = (
         xs_avals[:num_consts],
         xs_avals[num_consts:num_consts + num_carry],
-        xs_avals[num_consts + num_carry:]
     )
     def body_fun(carry, *args):
         carry_and_x = jaxpr_as_fun(jaxpr)(*(
@@ -236,7 +235,6 @@ def _perm_inverse(p):
 def transpose_scanify_rule(inscanvars, operand, permutation):
     [(argnum, in_axis)] = inscanvars
     assert argnum == 0
-    carry_init = None
     out_axis = _perm_inverse(permutation)[in_axis]
     def body_fn(carry, x):
         return None, lax.squeeze(
@@ -265,8 +263,9 @@ def conv_general_dilated_scanify_rule(
                 "Global scan is not yet supported over conv lhs batch axis "
                 "with batch_group_count > 1"
             )
-        return batch_scanify_rule(lax.conv_general_dilated_p, inscanvars,
-            lhs, rhs, window_strides=window_strides, padding=padding,
+        return batch_scanify_rule(
+            lax.conv_general_dilated_p, inscanvars, lhs, rhs,
+            window_strides=window_strides, padding=padding,
             lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
             dimension_numbers=dimension_numbers,
             feature_group_count=feature_group_count,

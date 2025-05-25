@@ -1,5 +1,4 @@
-from jax import tree_util, jit
-from jax.extend.core import ClosedJaxpr
+from jax import jit
 from jax import tree
 
 from fastar import core

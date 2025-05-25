@@ -5,8 +5,6 @@ from jax.extend.core import (
     ClosedJaxpr, Jaxpr, Primitive, Var, Literal, JaxprEqn
 )
 from jax.core import Atom
-from jax import make_jaxpr, ShapeDtypeStruct
-from jax.lax import scan_p
 
 from fastar.util import safe_map
 
@@ -104,7 +102,7 @@ def body_fn(closed_jaxpr: ClosedJaxpr, body_fns, scanvars, carry, xs):
             is Var and v in scanvars
         ]
         if inscanvars:
-            carry_in, eqn_body_fn  = carry_old.pop(), body_fns.pop()
+            carry_in, eqn_body_fn = carry_old.pop(), body_fns.pop()
             in_vals = map(read, e.invars)
             carry_out, ans = eqn_body_fn(carry_in, *in_vals)
             carry_new.append(carry_out)
