@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Any
 
 from jax.extend.core import (
@@ -78,11 +79,65 @@ class Deleted:
     pass
 deleted = Deleted()
 
-def make_scan(j: ClosedJaxpr):
-    jaxpr = j.jaxpr
+def body_fn(closed_jaxpr: ClosedJaxpr, body_fns, scanvars, carry, xs):
+    jaxpr = closed_jaxpr.jaxpr
+    body_fns = list(reversed(body_fns))
+    carry_old = list(reversed(carry))
+    carry_new = []
+
+    env = {}
+    def read(v: Atom):
+        return v.val if isinstance(v, Literal) else env[v]
+
+    def write(v: Var, val) -> None:
+        env[v] = val
+
+    map(write, jaxpr.constvars, closed_jaxpr.consts)
+    map(write, jaxpr.invars, xs)
+    lu = last_used(jaxpr)
+
+    for e in jaxpr.eqns:
+        subfuns, bind_params = e.primitive.get_bind_params(e.params)
+
+        inscanvars = [
+            (i, scanvars[v]) for (i, v) in enumerate(e.invars) if type(v)
+            is Var and v in scanvars
+        ]
+        if inscanvars:
+            carry_in, eqn_body_fn  = carry_old.pop(), body_fns.pop()
+            in_vals = map(read, e.invars)
+            carry_out, ans = eqn_body_fn(carry_in, *in_vals)
+            carry_new.append(carry_out)
+        else:
+            ans = e.primitive.bind(
+                *subfuns, *map(read, e.invars), **bind_params
+            )
+
+        if e.primitive.multiple_results:
+            map(write, e.outvars, ans)
+        else:
+            write(e.outvars[0], ans)
+        clean_up_dead_vars(e, env, lu)
+    return carry_new, map(read, jaxpr.outvars)
+
+def check_outvars(outvars, scanvars):
+    if any(o not in scanvars for o in outvars):
+        # TODO: More detail here...
+        raise ScanConversionError(
+            "All of the outputs of the transformed function must be "
+            "scanned over."
+        )
+    if any(scanvars[o] != 0 for o in outvars):
+        # TODO: ...and here.
+        raise ScanConversionError(
+            "All outputs of the transformed function must be scanned over "
+            "axis 0."
+        )
+
+def make_carry_init(closed_jaxpr: ClosedJaxpr):
+    jaxpr = closed_jaxpr.jaxpr
     carry_init = []
-    body_fns_ = []
-    outscanvarss_ = []
+    eqn_body_fns = []
 
     env = {}
 
@@ -101,7 +156,7 @@ def make_scan(j: ClosedJaxpr):
                 return env[v]
         else:
             return Abstract(v.aval)
-    map(write, jaxpr.constvars, j.consts)
+    map(write, jaxpr.constvars, closed_jaxpr.consts)
 
     # Map from Var to scan axis
     scanvars = dict(zip(jaxpr.invars, len(jaxpr.invars) * [0]))
@@ -115,18 +170,17 @@ def make_scan(j: ClosedJaxpr):
         if inscanvars:
             # TODO: Raise NotImplementedError if rule isn't defined
             in_avals = map(maybe_read, e.invars)
-            init, body_fn, outscanvars, to_delete = (
+            init, eqn_body_fn, eqn_outscanvars, to_delete = (
                 scanify_rules[e.primitive](
                     inscanvars, *subfuns, *in_avals, **bind_params
                 )
             )
-            outscanvars = [(e.outvars[i], l) for i, l in outscanvars]
+            eqn_outscanvars = [(e.outvars[i], l) for i, l in eqn_outscanvars]
             to_delete = [e.outvars[i] for i in to_delete]
             map(write, to_delete, len(to_delete) * [deleted])
-            scanvars.update(outscanvars)
+            scanvars.update(eqn_outscanvars)
             carry_init.append(init)
-            body_fns_.append(body_fn)
-            outscanvarss_.append(outscanvars)
+            eqn_body_fns.append(eqn_body_fn)
         else:
             in_vals = map(maybe_read, e.invars)
             if not any(isinstance(v, Abstract) for v in in_vals):
@@ -139,76 +193,12 @@ def make_scan(j: ClosedJaxpr):
                 else:
                     write(e.outvars[0], ans)
 
-    if any(o not in scanvars for o in jaxpr.outvars):
-        # TODO: More detail here...
-        raise ScanConversionError(
-            "All of the outputs of the transformed function must be "
-            "scanned over."
-        )
-    if any(scanvars[o] != 0 for o in jaxpr.outvars):
-        # TODO: ...and here.
-        raise ScanConversionError(
-            "All outputs of the transformed function must be scanned over "
-            "axis 0."
-        )
+    check_outvars(jaxpr.outvars, scanvars)
+    return eqn_body_fns, scanvars, carry_init
 
-    def body_fn(carry, xs):
-        body_fns = list(reversed(body_fns_))
-        carry_old = list(reversed(carry))
-        outscanvarss = list(reversed(outscanvarss_))
-        carry_new = []
-
-        env: dict[Var, Any] = {}
-        def read(v: Atom) -> Any:
-            return v.val if isinstance(v, Literal) else env[v]
-
-        def write(v: Var, val: Any) -> None:
-            env[v] = val
-
-        map(write, jaxpr.constvars, j.consts)
-        map(write, jaxpr.invars, xs)
-        lu = last_used(jaxpr)
-
-        for e in jaxpr.eqns:
-            subfuns, bind_params = e.primitive.get_bind_params(e.params)
-
-            inscanvars = [
-                (i, scanvars[v]) for (i, v) in enumerate(e.invars) if type(v)
-                is Var and v in scanvars
-            ]
-            if inscanvars:
-                carry_in = carry_old.pop()
-                body_fn = body_fns.pop()
-                outscanvars = outscanvarss.pop()
-                in_vals = map(read, e.invars)
-                # TODO: Raise NotImplementedError if rule isn't defined
-                carry_out, ans = body_fn(carry_in, *in_vals)
-                carry_new.append(carry_out)
-                scanvars.update(outscanvars)
-            else:
-                ans = e.primitive.bind(
-                    *subfuns, *map(read, e.invars), **bind_params
-                )
-
-            if e.primitive.multiple_results:
-                map(write, e.outvars, ans)
-            else:
-                write(e.outvars[0], ans)
-            clean_up_dead_vars(e, env, lu)
-        if any(o not in scanvars for o in jaxpr.outvars):
-            # TODO: More detail here...
-            raise ScanConversionError(
-                "All of the outputs of the transformed function must be "
-                "scanned over."
-            )
-        if any(scanvars[o] != 0 for o in jaxpr.outvars):
-            # TODO: ...and here.
-            raise ScanConversionError(
-                "All outputs of the transformed function must be scanned over "
-                "axis 0."
-            )
-        return carry_new, map(read, jaxpr.outvars)
-    return body_fn, carry_init
+def make_scan(closed_jaxpr: ClosedJaxpr):
+    eqn_body_fns, scanvars, carry_init = make_carry_init(closed_jaxpr)
+    return partial(body_fn, closed_jaxpr, eqn_body_fns, scanvars), carry_init
 
 class ScanConversionError(Exception):
     pass
