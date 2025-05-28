@@ -359,6 +359,23 @@ def test_transpose_wrong_axis():
     xs = rng.randn(2, 3, 4)
     np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, xs)
 
+def test_broadcast_in_dim():
+    rng = np.random.RandomState(0)
+    def f(xs):
+        return lax.broadcast_in_dim(xs, (2, 3, 4, 5), (0, 1, 2))
+    xs = rng.randn(2, 1, 4)
+    test_util.check_scan(f, xs)
+
+def test_broadcast_in_dim_other_axis():
+    rng = np.random.RandomState(0)
+    def f(xs):
+        xs = jnp.moveaxis(xs, 0, 1)
+        return jnp.moveaxis(
+            lax.broadcast_in_dim(xs, (3, 2, 4, 5), (0, 1, 2)), 1, 0
+        )
+    xs = rng.randn(2, 1, 4)
+    test_util.check_scan(f, xs)
+
 def test_conv_batch():
     rng = np.random.RandomState(0)
     lhs = rng.randn(2, 3, 4, 5)

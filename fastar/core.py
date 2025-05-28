@@ -119,12 +119,19 @@ def check_outvars(outvars, scanvars):
             "All of the outputs of the transformed function must be "
             "scanned over."
         )
-    if any(scanvars[o] != 0 for o in outvars):
+    if any(scanvars[o][0] != 0 for o in outvars):
         # TODO: ...and here.
         raise ScanConversionError(
             "All outputs of the transformed function must be scanned over "
             "axis 0."
         )
+    if any(scanvars[o][1] != 1 for o in outvars):
+        # TODO: ...and here.
+        raise ScanConversionError(
+            "All outputs of the transformed function must not be "
+            "strided/scaled along the scanned axis."
+        )
+
 
 def make_carry_init(closed_jaxpr: ClosedJaxpr):
     jaxpr = closed_jaxpr.jaxpr
@@ -151,11 +158,11 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr):
     map(write, jaxpr.constvars, closed_jaxpr.consts)
 
     # Map from Var to scan axis
-    scanvars = dict(zip(jaxpr.invars, len(jaxpr.invars) * [0]))
+    scanvars = dict(zip(jaxpr.invars, len(jaxpr.invars) * [(0, 1)]))
     for e in jaxpr.eqns:
         subfuns, bind_params = e.primitive.get_bind_params(e.params)
         inscanvars = [
-            (i, scanvars[v]) for (i, v) in enumerate(e.invars)
+            (i, *scanvars[v]) for i, v in enumerate(e.invars)
             if type(v) is Var and v in scanvars
         ]
         in_vals = map(maybe_read, e.invars)
@@ -168,7 +175,7 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr):
             )
             to_delete = [e.outvars[i] for i in to_delete]
             map(write, to_delete, len(to_delete) * [deleted])
-            scanvars.update((e.outvars[i], a) for i, a in outscanvars)
+            scanvars.update((e.outvars[i], (a, d)) for i, a, d in outscanvars)
             carry_init.append(init)
             eqn_body_fns.append(eqn_body_fn)
         elif not any(isinstance(v, Abstract) for v in in_vals):
