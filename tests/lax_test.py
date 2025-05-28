@@ -405,3 +405,25 @@ def test_slice():
     def f(operand):
         return lax.slice(operand, (0, 2, 1), (6, 3, 5), (1, 1, 2))
     test_util.check_scan(f, operand)
+
+def test_slice_none_stride():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4, 5)
+    def f(operand):
+        return lax.slice(operand, (0, 2, 1), (6, 3, 5))
+    test_util.check_scan(f, operand)
+
+def test_pad():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4)
+    def f(operand):
+        return lax.pad(operand, 3., [(0, 0, 0), (1, 2, 3)])
+    test_util.check_scan(f, operand)
+
+def tests_slice_then_pad():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4)
+    def f(operand):
+        sliced = lax.slice(operand, (0, 0), (6, 4), (2, 1))
+        return lax.pad(sliced, 3., [(0, 1, 1), (0, 0, 0)])
+    test_util.check_scan(f, operand)

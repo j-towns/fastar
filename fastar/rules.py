@@ -376,13 +376,21 @@ def slice_scanify_rule(
         raise ScanConversionError(
             "Slice must be over the full scanned axis"
         )
+    if strides is not None and operand.shape[in_axis] % strides[in_axis]:
+        raise ScanConversionError(
+            "Strided slice along scan axis must have a stride which exactly "
+            "exactly divides the input axis size"
+        )
 
     start_indices_ = list(start_indices)
-    limit_indices_ = list(limit_indices)
-    strides_ = list(strides)
     start_indices_.pop(in_axis)
+    limit_indices_ = list(limit_indices)
     limit_indices_.pop(in_axis)
-    strides_.pop(in_axis)
+    if strides is not None:
+        strides_ = list(strides)
+        strides_.pop(in_axis)
+    else:
+        strides_ = None
 
     def body_fn(carry, operand):
         assert carry is None
@@ -390,5 +398,42 @@ def slice_scanify_rule(
             operand, start_indices_, limit_indices_, strides_
         )
 
-    return None, body_fn, [(0, in_axis, in_stride * strides[in_axis])], []
+    out_stride = in_stride * (strides[in_axis] if strides is not None else 1)
+    return None, body_fn, [(0, in_axis, in_stride * out_stride)], []
 register_scanify_rule(lax.slice_p, slice_scanify_rule)
+
+def pad_scanify_rule(
+    inscanvars, operand, padding_value, padding_config
+):
+    assert len(inscanvars) == 1
+    [(argnum, axis, in_stride)] = inscanvars
+    assert argnum == 0  # Shouldn't be possible to scan over scalar
+                           # padding_value
+    scan_pad_start, scan_pad_end, scan_pad_interior = padding_config[axis]
+    if not scan_pad_start == 0:
+        raise ScanConversionError(
+            "Padding at the beginning of a scanned axis is not yet "
+            "supported"
+        )
+    if not scan_pad_end == scan_pad_interior:
+        raise ScanConversionError(
+            "End padding on scanned axis must be equal to interior padding"
+        )
+    dilation = scan_pad_interior + 1
+    if in_stride % dilation:
+        raise ScanConversionError(
+            "Pad dilation must exactly divide the input stride along scanned "
+            "axis"
+        )
+    out_stride = in_stride // dilation
+    padding_config_ = list(padding_config)
+    padding_config_.pop(axis)
+    def body_fn(i, operand, padding_value):
+        ans = lax.pad(operand, padding_value, padding_config_)
+        return i + 1, lax.cond(
+            i % in_stride,
+            lambda : jnp.full_like(ans, padding_value),
+            lambda : ans,
+        )
+    return 0, body_fn, [(0, axis, out_stride)], []
+register_scanify_rule(lax.pad_p, pad_scanify_rule)
