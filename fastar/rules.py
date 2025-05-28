@@ -366,3 +366,29 @@ def conv_general_dilated_scanify_rule(
 register_scanify_rule(
     lax.conv_general_dilated_p, conv_general_dilated_scanify_rule
 )
+
+def slice_scanify_rule(
+   inscanvars, operand, start_indices, limit_indices, strides
+):
+    [(_, in_axis, in_stride)] = inscanvars
+    if (limit_indices[in_axis] - start_indices[in_axis]
+            < operand.shape[in_axis]):
+        raise ScanConversionError(
+            "Slice must be over the full scanned axis"
+        )
+
+    start_indices_ = list(start_indices)
+    limit_indices_ = list(limit_indices)
+    strides_ = list(strides)
+    start_indices_.pop(in_axis)
+    limit_indices_.pop(in_axis)
+    strides_.pop(in_axis)
+
+    def body_fn(carry, operand):
+        assert carry is None
+        return carry, lax.slice(
+            operand, start_indices_, limit_indices_, strides_
+        )
+
+    return None, body_fn, [(0, in_axis, in_stride * strides[in_axis])], []
+register_scanify_rule(lax.slice_p, slice_scanify_rule)

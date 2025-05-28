@@ -398,3 +398,10 @@ def test_conv_causal():
             dimension_numbers=("TNC", "TIO", "TNC"),
         )
     test_util.check_scan(f, lhs)
+
+def test_slice():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4, 5)
+    def f(operand):
+        return lax.slice(operand, (0, 2, 1), (6, 3, 5), (1, 1, 2))
+    test_util.check_scan(f, operand)
