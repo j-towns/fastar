@@ -430,6 +430,42 @@ def test_conv_in_stride():
                                (0, 0, 0), (0, 0, 0)])
     test_util.check_scan(f, x)
 
+def test_conv_window_stride():
+    window_size = 2
+    window_stride = 3
+    rng = np.random.RandomState(0)
+    x = rng.randn(12, 4, 5)
+    rhs = rng.randn(window_size, 5, 6)
+    def f(x):
+        y = lax.conv_general_dilated(
+            x, rhs, window_strides=[window_stride],
+            padding=[(window_size - 1, 0)],
+            dimension_numbers=("TNC", "TIO", "TNC"),
+        )
+        return lax.pad(y, 0., [(0, window_stride - 1, window_stride - 1),
+                               (0, 0, 0), (0, 0, 0)])
+    test_util.check_scan(f, x)
+
+def test_conv_in_stride_window_stride():
+    window_size = 2
+    in_stride = 2
+    window_stride = 3
+    rng = np.random.RandomState(0)
+    x = rng.randn(12, 4, 5)
+    rhs = rng.randn(window_size, 5, 6)
+    def f(x):
+        y = lax.slice_in_dim(x, 0, 12, in_stride)
+        z = lax.conv_general_dilated(
+            y, rhs, window_strides=[window_stride],
+            padding=[(window_size - 1, 0)],
+            dimension_numbers=("TNC", "TIO", "TNC"),
+        )
+        return lax.pad(z, 0., [
+            (0, in_stride * window_stride - 1, in_stride * window_stride - 1),
+            (0, 0, 0), (0, 0, 0)
+        ])
+    test_util.check_scan(f, x)
+
 def test_slice():
     rng = np.random.RandomState(0)
     operand = rng.randn(6, 4, 5)
