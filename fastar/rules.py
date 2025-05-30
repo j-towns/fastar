@@ -3,8 +3,7 @@ from itertools import repeat
 import numpy as np
 from jax import numpy as jnp, lax
 from jax.extend.core import jaxpr_as_fun
-import jax
-from fastar.util import safe_map, unzip2, unzip3, safe_zip
+from fastar.util import safe_map, unzip3, safe_zip
 
 from fastar.core import register_scanify_rule, ScanConversionError
 
@@ -46,8 +45,8 @@ def batch_scanify_rule(op, inscanvars, *in_avals, **bind_params):
             ans = lax.squeeze(op.bind(*args, **bind_params), [axis])
             return i + 1, lax.cond(
                 i % stride,
-                lambda : jnp.zeros_like(ans),
-                lambda : ans,
+                lambda: jnp.zeros_like(ans),
+                lambda: ans,
             )
     return carry_init, body_fn, [(0, axis, stride)], []
 
@@ -327,6 +326,7 @@ def conv_general_dilated_scanify_rule(
         )
     length = lhs.shape[inscan_axis]
     if length % window_stride:
+        # TODO: Consider relaxing this constraint
         raise ScanConversionError(
             "Output scanned axis size of strided conv must exactly divide "
             "input scanned axis size."
@@ -406,6 +406,7 @@ def slice_scanify_rule(
             "Slice must be over the full scanned axis"
         )
     if strides is not None and operand.shape[in_axis] % strides[in_axis]:
+        # TODO: Consider relaxing this constraint
         raise ScanConversionError(
             "Strided slice along scan axis must have a stride which exactly "
             "exactly divides the input axis size"
@@ -461,8 +462,8 @@ def pad_scanify_rule(
         ans = lax.pad(operand, padding_value, padding_config_)
         return i + 1, lax.cond(
             i % in_stride,
-            lambda : jnp.full_like(ans, padding_value),
-            lambda : ans,
+            lambda: jnp.full_like(ans, padding_value),
+            lambda: ans,
         )
     return 0, body_fn, [(0, axis, out_stride)], []
 register_scanify_rule(lax.pad_p, pad_scanify_rule)
