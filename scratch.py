@@ -53,6 +53,10 @@
 # jaxpr building up the init carry and a list of local body funs, then create a
 # global body fun which iterates through the list. This would mean that each
 # rule is only evaluated once, on fully-shaped arguments.
+
+# Conv dilation notes 30/5/2025
+# *_____*_____*_____*_____  inscan_stride = 6, lhs_dilation = 2
+# *__0__*__0__*__0__*__0__
 import jax.numpy as jnp
 from jax import lax, make_jaxpr
 from fastar.api import as_scan

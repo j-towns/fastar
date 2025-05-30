@@ -319,8 +319,9 @@ def conv_general_dilated_scanify_rule(
     outscan_axis = dimension_numbers.out_spec[2]
     window_stride, = window_strides
     rhs_dilation, = rhs_dilation
+    lhs_dilation, = lhs_dilation
     window_size = rhs.shape[dimension_numbers.rhs_spec[2]]
-    if padding != ((rhs_dilation * (window_size - 1), 0),):
+    if padding != ((rhs_dilation * (window_size - 1), lhs_dilation - 1),):
         raise ScanConversionError(
             "Only causal padding is supported in conv."
         )
@@ -331,65 +332,51 @@ def conv_general_dilated_scanify_rule(
             "Output scanned axis size of strided conv must exactly divide "
             "input scanned axis size."
         )
-    outscan_stride = inscan_stride * window_stride
-    if lhs_dilation != (1,):
+    if inscan_stride % lhs_dilation:
         raise ScanConversionError(
-            "lhs_dilation > 1 not yet supported in conv."
+            "Conv lhs_dilation must exactly divide input stride along scanned "
+            "axis."
         )
+    outscan_stride = (inscan_stride * window_stride) // lhs_dilation
     carry_shape = list(lhs.shape)
     carry_shape[inscan_axis] = rhs_dilation * (window_size - 1)
-    if outscan_stride == 1:
-        carry_init = jnp.zeros(carry_shape, lhs.dtype)
-        def body_fn(carry, x, rhs):
-            lhs = lax.concatenate(
-                [carry, jnp.expand_dims(x, inscan_axis)],
-                inscan_axis
-            )
-            # TODO: Consider using a dot instead of conv
-            out = lax.conv_general_dilated(
-                lhs, rhs, window_strides=window_strides, padding="VALID",
-                lhs_dilation=lhs_dilation, rhs_dilation=(rhs_dilation,),
-                dimension_numbers=dimension_numbers,
-                feature_group_count=feature_group_count,
-                batch_group_count=batch_group_count, precision=precision,
-                preferred_element_type=preferred_element_type,
-            )
-            out = lax.squeeze(out, [outscan_axis])
-            carry_new = lax.slice_in_dim(
-                lhs, 1, lhs.shape[inscan_axis], 1, inscan_axis
-            )
-            return carry_new, out
-    else:
-        carry_init = 0, jnp.zeros(carry_shape, lhs.dtype)
-        def body_fn(i_and_carry, x, rhs):
-            i, carry = i_and_carry
-            lhs = lax.concatenate(
-                [carry, jnp.expand_dims(x, inscan_axis)],
-                inscan_axis
-            )
-            out = lax.conv_general_dilated(
-                lhs, rhs, window_strides=[1], padding="VALID",
-                lhs_dilation=lhs_dilation, rhs_dilation=(rhs_dilation,),
-                dimension_numbers=dimension_numbers,
-                feature_group_count=feature_group_count,
-                batch_group_count=batch_group_count, precision=precision,
-                preferred_element_type=preferred_element_type,
-            )
-            out = lax.squeeze(out, [outscan_axis])
-            carry_new = lax.slice_in_dim(
-                lhs, 1, lhs.shape[inscan_axis], 1, inscan_axis
-            )
-            out = lax.cond(
-                i % outscan_stride,
-                lambda: jnp.zeros_like(out),
-                lambda: out,
-            )
-            carry_new = lax.cond(
-                i % inscan_stride,
-                lambda: carry,
-                lambda: carry_new,
-            )
-            return (i + 1, carry_new), out
+    carry_init = 0, jnp.zeros(carry_shape, lhs.dtype)
+    def body_fn(i_and_carry, x, rhs):
+        # TODO: Optimize away the lax.conds when possible
+        i, carry = i_and_carry
+        lhs = lax.concatenate(
+            [
+                carry,
+                jnp.expand_dims(lax.cond(
+                    i % inscan_stride,
+                    lambda: jnp.zeros_like(x),
+                    lambda: x,
+                ), inscan_axis)
+            ], inscan_axis
+        )
+        out = lax.conv_general_dilated_p.bind(
+            lhs, rhs, window_strides=(1,), padding=((0, 0),),
+            lhs_dilation=(1,), rhs_dilation=(rhs_dilation,),
+            dimension_numbers=dimension_numbers,
+            feature_group_count=feature_group_count,
+            batch_group_count=batch_group_count, precision=precision,
+            preferred_element_type=preferred_element_type,
+        )
+        out = lax.squeeze(out, [outscan_axis])
+        carry_new = lax.slice_in_dim(
+            lhs, 1, lhs.shape[inscan_axis], 1, inscan_axis
+        )
+        out = lax.cond(
+            i % outscan_stride,
+            lambda: jnp.zeros_like(out),
+            lambda: out,
+        )
+        carry_new = lax.cond(
+            i % (inscan_stride // lhs_dilation),
+            lambda: carry,
+            lambda: carry_new,
+        )
+        return (i + 1, carry_new), out
     return carry_init, body_fn, [(0, outscan_axis, outscan_stride)], []
 
 register_scanify_rule(

@@ -466,6 +466,52 @@ def test_conv_in_stride_window_stride():
         ])
     test_util.check_scan(f, x)
 
+def test_conv_lhs_dilation():
+    window_size = 2
+    lhs_dilation = 3
+    rng = np.random.RandomState(0)
+    lhs = rng.randn(12, 4, 5)
+    rhs = rng.randn(window_size, 5, 6)
+    def f(x):
+        y = lax.slice_in_dim(x, 0, 12, 3)
+        return lax.conv_general_dilated(
+            y, rhs, window_strides=[1], padding=[((window_size - 1),
+                                                  lhs_dilation - 1)],
+            lhs_dilation=(lhs_dilation,),
+            dimension_numbers=("TNC", "TIO", "TNC"),
+        )
+    test_util.check_scan(f, lhs)
+
+def test_conv_window_stride_lhs_dilation():
+    window_size = 2
+    lhs_dilation = 3
+    rng = np.random.RandomState(0)
+    lhs = rng.randn(12, 4, 5)
+    rhs = rng.randn(window_size, 5, 6)
+    def f(x):
+        y = lax.slice_in_dim(x, 0, 12, 3)
+        z = lax.conv_general_dilated(
+            y, rhs, window_strides=[2], padding=[((window_size - 1),
+                                                  lhs_dilation - 1)],
+            lhs_dilation=(lhs_dilation,),
+            dimension_numbers=("TNC", "TIO", "TNC"),
+        )
+        return lax.pad(z, 0., [(0, 1, 1), (0, 0, 0), (0, 0, 0)])
+    test_util.check_scan(f, lhs)
+
+def test_conv_transposed():
+    window_size = 2
+    rng = np.random.RandomState(0)
+    lhs = rng.randn(6, 4, 5)
+    rhs = rng.randn(window_size, 5, 6)
+    def f(x):
+        y = jnp.moveaxis(x, 0, 1)
+        return jnp.moveaxis(lax.conv_general_dilated(
+            y, rhs, window_strides=[1], padding=[(window_size - 1, 0)],
+            dimension_numbers=("NTC", "TIO", "NTC"),
+        ), 0, 1)
+    test_util.check_scan(f, lhs)
+
 def test_slice():
     rng = np.random.RandomState(0)
     operand = rng.randn(6, 4, 5)
