@@ -454,3 +454,39 @@ def pad_scanify_rule(
         )
     return 0, body_fn, [(0, axis, out_stride)], []
 register_scanify_rule(lax.pad_p, pad_scanify_rule)
+
+def concatenate_scanify_rule(inscanvars, *operands, dimension):
+    argnums, axes, instrides = unzip3(inscanvars)
+    if not all_equal(axes):
+        raise ScanConversionError(
+            "All scanned arguments to concatenate must be scanned along the "
+            "same axis."
+        )
+    axis = axes[0]
+    if axis == dimension:
+        raise ScanConversionError(
+            "Global scan along concatenation dimension is not supported"
+        )
+    assert all_equal(instrides) # This should be guaranteed now
+    instride = instrides[0]
+    carry_init = 0
+    def body_fn(i, *operands):
+        operands = [
+            jnp.expand_dims(
+                o if n in argnums else lax.dynamic_index_in_dim(
+                    o, i, axis, False
+                ), axis
+            )
+            for n, o in enumerate(operands)
+        ]
+        ans = jnp.squeeze(
+            lax.concatenate_p.bind(*operands, dimension=dimension),
+            axis,
+        )
+        return i + 1, lax.cond(
+            i % instride,
+            lambda: jnp.zeros_like(ans),
+            lambda: ans,
+        )
+    return carry_init, body_fn, [(0, axis, instride)], []
+register_scanify_rule(lax.concatenate_p, concatenate_scanify_rule)

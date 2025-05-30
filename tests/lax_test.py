@@ -540,3 +540,18 @@ def tests_slice_then_pad():
         sliced = lax.slice(operand, (0, 0), (6, 4), (2, 1))
         return lax.pad(sliced, 3., [(0, 1, 1), (0, 0, 0)])
     test_util.check_scan(f, operand)
+
+def test_concatenate():
+    rng = np.random.RandomState(0)
+    x, y = rng.randn(6, 4), rng.randn(6, 3)
+    def f(x):
+        return lax.concatenate([x, y], 1)
+    test_util.check_scan(f, x)
+
+def test_concatenate_both_scanned():
+    rng = np.random.RandomState(0)
+    x, y = rng.randn(6, 4), rng.randn(6, 3)
+    def f(x_and_y):
+        x, y = x_and_y
+        return lax.concatenate([x, y], 1)
+    test_util.check_scan(f, (x, y))
