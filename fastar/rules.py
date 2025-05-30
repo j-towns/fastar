@@ -295,7 +295,7 @@ def conv_general_dilated_scanify_rule(
         if batch_group_count > 1:
             raise ScanConversionError(
                 "Global scan is not yet supported over conv lhs batch axis "
-                "with batch_group_count > 1"
+                "with batch_group_count > 1."
             )
         return batch_scanify_rule(
             lax.conv_general_dilated_p, inscanvars, lhs, rhs,
@@ -319,12 +319,13 @@ def conv_general_dilated_scanify_rule(
     assert inscan_axis == dimension_numbers.lhs_spec[2]
     outscan_axis = dimension_numbers.out_spec[2]
     window_stride, = window_strides
+    rhs_dilation, = rhs_dilation
     if window_stride > 1:
         raise ScanConversionError(
             "Window strides > 1 not yet supported in conv."
         )
     window_size = rhs.shape[dimension_numbers.rhs_spec[2]]
-    if padding != ((window_size - 1, 0),):
+    if padding != ((rhs_dilation * (window_size - 1), 0),):
         raise ScanConversionError(
             "Only causal padding is supported in conv."
         )
@@ -332,14 +333,10 @@ def conv_general_dilated_scanify_rule(
         raise ScanConversionError(
             "lhs_dilation > 1 not yet supported in conv."
         )
-    if rhs_dilation != (1,):
-        raise ScanConversionError(
-            "rhs_dilation > 1 not yet supported in conv."
-        )
     carry_shape = list(lhs.shape)
-    carry_shape[inscan_axis] = window_size - 1
-    carry_init = jnp.zeros(carry_shape, lhs.dtype)
+    carry_shape[inscan_axis] = rhs_dilation * (window_size - 1)
     if inscan_stride == 1:
+        carry_init = jnp.zeros(carry_shape, lhs.dtype)
         def body_fn(carry, x, rhs):
             lhs = lax.concatenate(
                 [carry, jnp.expand_dims(x, inscan_axis)],
@@ -348,19 +345,42 @@ def conv_general_dilated_scanify_rule(
             # TODO: Consider using a dot instead of conv
             out = lax.conv_general_dilated(
                 lhs, rhs, window_strides=window_strides, padding="VALID",
-                lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
+                lhs_dilation=lhs_dilation, rhs_dilation=(rhs_dilation,),
                 dimension_numbers=dimension_numbers,
                 feature_group_count=feature_group_count,
                 batch_group_count=batch_group_count, precision=precision,
                 preferred_element_type=preferred_element_type,
             )
             out = lax.squeeze(out, [outscan_axis])
-            carry_new = lax.slice_in_dim(lhs, 1, window_size, 1, inscan_axis)
+            carry_new = lax.slice_in_dim(
+                lhs, 1, lhs.shape[inscan_axis], 1, inscan_axis
+            )
             return carry_new, out
     else:
-        raise ScanConversionError(
-            "Strided input to conv not yet implemented"
-        )
+        carry_init = 0, jnp.zeros(carry_shape, lhs.dtype)
+        def body_fn(i_and_carry, x, rhs):
+            i, carry = i_and_carry
+            lhs = lax.concatenate(
+                [carry, jnp.expand_dims(x, inscan_axis)],
+                inscan_axis
+            )
+            out = lax.conv_general_dilated(
+                lhs, rhs, window_strides=window_strides, padding="VALID",
+                lhs_dilation=lhs_dilation, rhs_dilation=(rhs_dilation,),
+                dimension_numbers=dimension_numbers,
+                feature_group_count=feature_group_count,
+                batch_group_count=batch_group_count, precision=precision,
+                preferred_element_type=preferred_element_type,
+            )
+            out = lax.squeeze(out, [outscan_axis])
+            carry_new = lax.slice_in_dim(
+                lhs, 1, lhs.shape[inscan_axis], 1, inscan_axis
+            )
+            return lax.cond(
+                i % inscan_stride,
+                lambda : ((i + 1, carry), jnp.zeros_like(out)),
+                lambda : ((i + 1, carry_new), out),
+            )
     return carry_init, body_fn, [(0, outscan_axis, inscan_stride)], []
 
 register_scanify_rule(
