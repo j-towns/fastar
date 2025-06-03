@@ -555,3 +555,43 @@ def test_concatenate_both_scanned():
         x, y = x_and_y
         return lax.concatenate([x, y], 1)
     test_util.check_scan(f, (x, y))
+
+def test_dot_general_both_batch():
+    rng = np.random.RandomState(0)
+    x, y = rng.randn(6, 4, 3), rng.randn(6, 3, 4)
+    def f(x_and_y):
+        x, y = x_and_y
+        return lax.dot_general(x, y, (([1], [2]), ([0], [0])))
+    test_util.check_scan(f, (x, y))
+
+def test_dot_general_lhs_batch():
+    rng = np.random.RandomState(0)
+    x, y = rng.randn(6, 4, 3), rng.randn(6, 3, 4)
+    def f(x):
+        return lax.dot_general(x, y, (([1], [2]), ([0], [0])))
+    test_util.check_scan(f, x)
+
+def test_dot_general_lhs_non_batch():
+    rng = np.random.RandomState(0)
+    x, y = rng.randn(6, 3, 4), rng.randn(6, 3, 4)
+    def f(x):
+        return lax.dot_general(
+            jnp.moveaxis(x, 0, 1), y, (([2], [2]), ([1], [0]))
+        )
+    test_util.check_scan(f, x)
+
+def test_dot_general_rhs_batch():
+    rng = np.random.RandomState(0)
+    x, y = rng.randn(6, 4, 3), rng.randn(6, 3, 4)
+    def f(y):
+        return lax.dot_general(x, y, (([1], [2]), ([0], [0])))
+    test_util.check_scan(f, y)
+
+def test_dot_general_rhs_non_batch():
+    rng = np.random.RandomState(0)
+    x, y = rng.randn(6, 3, 4), rng.randn(6, 3, 4)
+    def f(y):
+        return lax.dot_general(
+            jnp.moveaxis(x, 0, 1), y, (([2], [2]), ([1], [0]))
+        )
+    test_util.check_scan(f, y)

@@ -490,3 +490,115 @@ def concatenate_scanify_rule(inscanvars, *operands, dimension):
         )
     return carry_init, body_fn, [(0, axis, instride)], []
 register_scanify_rule(lax.concatenate_p, concatenate_scanify_rule)
+
+def dot_general_scanify_rule(
+    inscanvars, lhs, rhs, dimension_numbers, precision, preferred_element_type,
+    out_sharding,
+):
+    ((lhs_contracting_axes, rhs_contracting_axes),
+     (lhs_batch_axes, rhs_batch_axes)) = dimension_numbers
+    # Two supported options:
+    #  (1) scan axis along batch axis of both inputs
+    #  (2) scan axis along batch/non-contracting axis of one input
+    argnums, axes, strides = unzip3(inscanvars)
+    if len(argnums) == 2:  # Option (1)
+        assert argnums == (0, 1)
+        lhs_axis, rhs_axis = axes
+        stride, rhs_stride = strides
+        if out_sharding is not None:
+            # TODO: Check if it's ok to relax this
+            raise ScanConversionError(
+                "Out sharding is not yet supported in dot_general"
+            )
+        if rhs_stride != stride:
+            raise ScanConversionError(
+                "Strides for lhs and rhs inputs to dot_general must match."
+            )
+        if lhs_axis not in lhs_batch_axes or rhs_axis not in rhs_batch_axes:
+            raise ScanConversionError(
+                "When scanning over both inputs to dot_general, the scanned "
+                "axes must both be batch axes."
+            )
+        if lhs_batch_axes.index(lhs_axis) != rhs_batch_axes.index(rhs_axis):
+            raise ScanConversionError(
+                "Scanning over two non-corresponding batch axis inputs to "
+                "dot_general is not supported."
+            )
+        out_axis = lhs_batch_axes.index(lhs_axis)
+        def body_fn(i, lhs, rhs):
+            ans = jnp.squeeze(lax.dot_general_p.bind(
+                jnp.expand_dims(lhs, lhs_axis), jnp.expand_dims(rhs, rhs_axis),
+                dimension_numbers=dimension_numbers, precision=precision,
+                preferred_element_type=preferred_element_type,
+                out_sharding=out_sharding,
+            ), out_axis)
+            return i + 1, lax.cond(
+                i % stride,
+                lambda: jnp.zeros_like(ans),
+                lambda: ans
+            )
+        return 0, body_fn, [(0, out_axis, stride)], []
+    [argnum], [axis], [stride] = argnums, axes, strides
+    if argnum == 0:  # Option (2)
+        if axis in lhs_contracting_axes:
+            raise ScanConversionError(
+                "Scanning over a contracting axis in dot_general is not "
+                "supported."
+            )
+        lhs_axes = list(range(lhs.ndim))
+        for a in lhs_batch_axes + lhs_contracting_axes:
+            lhs_axes.remove(a)
+        out_axis = (
+            lhs_batch_axes.index(axis) if axis in lhs_batch_axes else
+            len(lhs_batch_axes) + lhs_axes.index(axis)
+        )
+        def body_fn(i, lhs, rhs):
+            if axis in lhs_batch_axes:
+                rhs_axis = rhs_batch_axes[lhs_batch_axes.index(axis)]
+                rhs = lax.dynamic_index_in_dim(
+                    rhs, i, rhs_axis, keepdims=True
+                )
+            ans = jnp.squeeze(lax.dot_general_p.bind(
+                jnp.expand_dims(lhs, axis), rhs,
+                dimension_numbers=dimension_numbers, precision=precision,
+                preferred_element_type=preferred_element_type,
+                out_sharding=out_sharding,
+            ), out_axis)
+            return i + 1, lax.cond(
+                i % stride,
+                lambda: jnp.zeros_like(ans),
+                lambda: ans
+            )
+    else:  # Option (2)
+        assert argnum == 1
+        if axis in rhs_contracting_axes:
+            raise ScanConversionError(
+                "Scanning over a contracting axis in dot_general is not "
+                "supported."
+            )
+        rhs_axes = list(range(rhs.ndim))
+        for a in rhs_batch_axes + rhs_contracting_axes:
+            rhs_axes.remove(a)
+        out_axis = (
+            rhs_batch_axes.index(axis) if axis in rhs_batch_axes else
+            lhs.ndim - len(lhs_contracting_axes) + rhs_axes.index(axis)
+        )
+        def body_fn(i, lhs, rhs):
+            if axis in rhs_batch_axes:
+                lhs_axis = lhs_batch_axes[rhs_batch_axes.index(axis)]
+                lhs = lax.dynamic_index_in_dim(
+                    lhs, i, lhs_axis, keepdims=True
+                )
+            ans = jnp.squeeze(lax.dot_general_p.bind(
+                lhs, jnp.expand_dims(rhs, axis),
+                dimension_numbers=dimension_numbers, precision=precision,
+                preferred_element_type=preferred_element_type,
+                out_sharding=out_sharding,
+            ), out_axis)
+            return i + 1, lax.cond(
+                i % stride,
+                lambda: jnp.zeros_like(ans),
+                lambda: ans
+            )
+    return 0, body_fn, [(0, out_axis, stride)], []
+register_scanify_rule(lax.dot_general_p, dot_general_scanify_rule)
